@@ -92,6 +92,35 @@ provenance. Native log content remains untrusted; `raw_ref` is only provenance
 metadata, while the full raw event remains in the existing Phase 3 storage path.
 Sanitization for LLM use is a later phase.
 
+## Phase 5 — Threat Intelligence Enrichment
+
+Phase 5 adds offline-first IOC enrichment before future AI/correlation work. The
+backend enriches bounded indicators extracted from the Phase 4 `NormalizedAlert`
+contract; it does not query or embed raw Wazuh JSON in enrichment output.
+
+Supported indicator types are `ip`, `domain`, `hash`, and `url`. Results follow a
+unified shape with `indicator`, `type`, sanitized `providers`, `risk_score`,
+`verdict`, `cached`, `cached_until`, and `last_lookup_at`. Cache TTLs match the
+roadmap: IP and URL results cache for 6 hours, domains for 12 hours, and hashes
+for 24 hours.
+
+The default provider mode is deterministic and offline, so local testing does not
+require VirusTotal, AbuseIPDB, URLHaus, Redis, or internet access. External
+provider settings remain placeholders for a later pass.
+
+Example API calls:
+
+```bash
+curl -fsS 'http://localhost:8000/api/v1/threat-intel/lookup?type=ip&indicator=10.10.10.50'
+curl -fsS -X POST 'http://localhost:8000/api/v1/alerts/<alert-id>/threat-intel'
+curl -fsS 'http://localhost:8000/api/v1/alerts/<alert-id>/threat-intel'
+```
+
+Threat-intel cache rows are stored separately from `alerts.raw_event`, and alert
+associations are replay-safe. See
+[`docs/threat-intelligence.md`](docs/threat-intelligence.md) for the detailed
+contract and offline provider behavior.
+
 ## Definition of Done — Phase 3
 
 ```bash
@@ -113,6 +142,7 @@ Nguồn Wazuh chính thức mô tả custom integration nhận lần lượt ale
 ## Status
 
 Đây là MVP của luồng Wazuh Manager → webhook ký HMAC → FastAPI → PostgreSQL,
-với Phase 4 canonical normalization cho downstream services. Wazuh API/Indexer
-polling, threat intelligence, correlation, AI, frontend và active response là
-các phase tiếp theo, chưa được triển khai trong codebase này.
+với Phase 4 canonical normalization và Phase 5 offline-first threat intelligence
+enrichment cho downstream services. Wazuh API/Indexer polling, real external
+threat-intel providers, correlation, AI, frontend và active response là các phase
+tiếp theo, chưa được triển khai trong codebase này.

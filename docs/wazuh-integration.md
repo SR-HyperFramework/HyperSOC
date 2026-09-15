@@ -100,7 +100,8 @@ It does not alter webhook delivery, database deduplication, or the public Phase
 3 alert API. `NormalizedAlert.id` is a caller-supplied or generated canonical
 UUID; the native Wazuh alert id remains `raw_ref` provenance only. The stored
 native event remains untrusted evidence; do not pass `raw_event` directly to an
-LLM. A bounded sanitization layer is planned for a later phase.
+LLM. Phase 5 threat-intelligence enrichment consumes bounded canonical
+indicators from `NormalizedAlert`; see [`threat-intelligence.md`](threat-intelligence.md).
 
 ## Validate delivery
 

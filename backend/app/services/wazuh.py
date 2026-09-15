@@ -41,6 +41,41 @@ def normalize_ingested_alert(alert: AlertIngest, *, alert_id: UUID | None = None
     return normalize_wazuh_alert(alert.model_dump(mode="json"), alert_id=alert_id)
 
 
+def normalize_persisted_alert(alert: Alert) -> NormalizedAlert:
+    """Convert a stored alert row to the Phase 4 contract for downstream services."""
+    try:
+        if isinstance(alert.raw_event, dict) and alert.raw_event:
+            return normalize_wazuh_alert(alert.raw_event, alert_id=alert.id)
+    except ValueError:
+        pass
+
+    envelope = {
+        "source": alert.source,
+        "timestamp": alert.timestamp,
+        "agent": {"id": alert.agent_id, "name": alert.agent_name},
+        "rule": {
+            "id": alert.rule_id,
+            "level": alert.rule_level,
+            "description": alert.rule_description,
+            "groups": alert.groups,
+            "mitre_ids": alert.mitre_ids,
+        },
+        "event": {
+            "src_ip": alert.src_ip,
+            "dst_ip": alert.dst_ip,
+            "src_port": alert.src_port,
+            "dst_port": alert.dst_port,
+            "username": alert.username,
+            "process_name": alert.process_name,
+            "process_command_line": alert.process_command_line,
+            "file_path": alert.file_path,
+            "file_hash": alert.file_hash,
+        },
+        "raw": {},
+    }
+    return normalize_wazuh_alert(envelope, alert_id=alert.id)
+
+
 async def ingest_alert(db: AsyncSession, alert: AlertIngest) -> tuple[Alert, bool]:
     fingerprint = compute_fingerprint(alert)
 
