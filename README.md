@@ -121,6 +121,33 @@ associations are replay-safe. See
 [`docs/threat-intelligence.md`](docs/threat-intelligence.md) for the detailed
 contract and offline provider behavior.
 
+## Phase 6 — Rule-based Correlation Engine
+
+Phase 6 turns related normalized/enriched alerts into incidents without using AI.
+The correlation engine consumes persisted alerts through the Phase 4
+`normalize_persisted_alert()` bridge and may read sanitized Phase 5 enrichment
+associations; it does not parse raw Wazuh JSON directly and does not run from the
+signed ingest endpoint.
+
+The first rules are deterministic: related alerts sharing host and source IP
+within the default 10-minute window become one incident, with additional scoring
+for brute-force, PowerShell, persistence, and malware/hash chains. Incidents keep
+status, severity, confidence, first/last seen timestamps, primary host/user/source
+IP, MITRE IDs, alert count, and related alert IDs.
+
+Example API calls:
+
+```bash
+curl -fsS -X POST 'http://localhost:8000/api/v1/correlation/run' \
+  -H 'Content-Type: application/json' \
+  -d '{"lookback_minutes":60,"window_minutes":10,"min_alerts":2}'
+curl -fsS 'http://localhost:8000/api/v1/incidents?status=NEW'
+curl -fsS 'http://localhost:8000/api/v1/incidents/<incident-id>'
+```
+
+See [`docs/correlation.md`](docs/correlation.md) for rule details and
+idempotency behavior.
+
 ## Definition of Done — Phase 3
 
 ```bash
@@ -142,7 +169,7 @@ Nguồn Wazuh chính thức mô tả custom integration nhận lần lượt ale
 ## Status
 
 Đây là MVP của luồng Wazuh Manager → webhook ký HMAC → FastAPI → PostgreSQL,
-với Phase 4 canonical normalization và Phase 5 offline-first threat intelligence
-enrichment cho downstream services. Wazuh API/Indexer polling, real external
-threat-intel providers, correlation, AI, frontend và active response là các phase
-tiếp theo, chưa được triển khai trong codebase này.
+với Phase 4 canonical normalization, Phase 5 offline-first threat intelligence
+enrichment, và Phase 6 rule-based incident correlation cho downstream services.
+Wazuh API/Indexer polling, real external threat-intel providers, AI, frontend và
+active response là các phase tiếp theo, chưa được triển khai trong codebase này.

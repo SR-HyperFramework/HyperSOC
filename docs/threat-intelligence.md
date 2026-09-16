@@ -126,3 +126,5 @@ aggregate `verdict`.
   RBAC, and rate limiting are added in later phases.
 - Redis remains reserved for a future worker/queue design and is not required for
   Phase 5.
+- Phase 6 rule-based correlation consumes sanitized enrichment associations when
+  scoring malware/hash chains; see [`correlation.md`](correlation.md).
