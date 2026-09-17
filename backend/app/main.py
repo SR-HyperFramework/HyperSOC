@@ -2,7 +2,10 @@ from fastapi import FastAPI
 from sqlalchemy import text
 
 from app.api.alerts import router as alerts_router
+from app.api.dashboard import router as dashboard_router
 from app.api.incidents import router as incidents_router
+from app.api.knowledge_base import router as knowledge_router
+from app.api.response import router as response_router
 from app.api.threat_intel import router as threat_intel_router
 from app.core.config import settings
 from app.core.database import engine
@@ -18,6 +21,9 @@ app = FastAPI(title="AI SOC Backend")
 app.include_router(alerts_router)
 app.include_router(threat_intel_router)
 app.include_router(incidents_router)
+app.include_router(knowledge_router)
+app.include_router(dashboard_router)
+app.include_router(response_router)
 
 
 @app.get("/health")

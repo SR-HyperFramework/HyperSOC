@@ -9,6 +9,7 @@ from app.core.config import settings
 from app.core.database import Base
 from app.models.alert import Alert  # noqa: F401 - registers table metadata
 from app.models.incident import Incident, IncidentAlert  # noqa: F401
+from app.models.response_action import ResponseAction  # noqa: F401
 from app.models.threat_intel import AlertThreatIntel, ThreatIntelIndicator  # noqa: F401
 
 config = context.config

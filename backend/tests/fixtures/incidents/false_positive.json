@@ -1,0 +1,12 @@
+{
+  "name": "false_positive",
+  "expected_classification": "unknown",
+  "expected_mitre_ids": [],
+  "expected_min_severity": "low",
+  "incident": {
+    "title": "Known maintenance telemetry",
+    "primary_host": "linux-server",
+    "alert_count": 1,
+    "business_context": "approved maintenance window"
+  }
+}

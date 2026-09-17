@@ -148,6 +148,83 @@ curl -fsS 'http://localhost:8000/api/v1/incidents/<incident-id>'
 See [`docs/correlation.md`](docs/correlation.md) for rule details and
 idempotency behavior.
 
+## Phase 7 — Offline AI Incident Triage
+
+Phase 7 adds incident-level AI triage after correlation. The triage service builds
+a bounded context from the incident, Phase 4 normalized alert evidence, and Phase
+5 sanitized enrichment summaries; it does not send `alerts.raw_event`, native
+Wazuh JSON, signed ingest bodies, or raw provider payloads to the AI provider.
+
+The default provider is deterministic and offline, so local tests and demos do not
+require a real LLM endpoint, internet access, or API keys. A successful run stores
+a short validated summary in `incidents.ai_summary` and compact schema-validated
+JSON in `incidents.ai_analysis`. AI recommendations are advisory only and do not
+execute response actions or automatically change incident lifecycle fields.
+
+Example API calls:
+
+```bash
+curl -fsS -X POST 'http://localhost:8000/api/v1/incidents/<incident-id>/ai-triage' \
+  -H 'Content-Type: application/json' \
+  -d '{"force":true}'
+curl -fsS 'http://localhost:8000/api/v1/incidents/<incident-id>'
+```
+
+See [`docs/ai-triage.md`](docs/ai-triage.md) for the strict output schema,
+configuration, and security boundaries.
+
+## Phase 8 — Prompt Injection Protection
+
+Phase 8 makes the AI triage boundary explicit: normalized incident evidence passes
+through a dedicated sanitizer before provider analysis, then is serialized as
+structured JSON inside `<UNTRUSTED_EVENT_DATA>` delimiters for future real LLM
+providers. The sanitizer strips control characters, removes binary-like values and
+huge blobs, redacts secret-like tokens, truncates long fields, and caps context
+size, JSON depth, and list lengths.
+
+See [`docs/prompt-injection-protection.md`](docs/prompt-injection-protection.md)
+for the sanitizer controls and prompt boundary.
+
+## Phase 9 — Offline RAG Knowledge Base
+
+Phase 9 adds a local SOC knowledge base for MITRE ATT&CK, Wazuh notes, Sigma
+explanations, internal playbooks, and Windows/Linux references. Markdown documents
+are chunked deterministically and searched offline through a replaceable
+`VectorStore` interface. Retrieved chunks populate AI triage MITRE/playbook
+context and remain subject to Phase 8 sanitization and strict output validation.
+
+```bash
+curl -fsS -X POST 'http://localhost:8000/api/v1/knowledge/index'
+curl -fsS 'http://localhost:8000/api/v1/knowledge/search?mitre_ids=T1110&alert_types=ssh&top_k=5'
+```
+
+The default mode requires no Qdrant, embeddings, network access, or API keys. See
+[`docs/knowledge-base.md`](docs/knowledge-base.md) for sources, metadata, limits,
+and retrieval behavior.
+
+## Phases 10–22 — Analyst workflow through MVP closure
+
+Later roadmap phases add analyst-facing APIs, a static dashboard shell, response
+action approval/execution flow, MITRE visualization guidance, safe lab automation,
+observability/cost/eval/hardening/testing docs, and final MVP scope tracking.
+
+Key additions:
+
+- Analyst APIs: `/api/v1/incidents/{id}/triage`, `/reanalyze`, `/analysis`, and
+  `/api/v1/dashboard/{summary,mitre,timeline}`.
+- Response APIs: `/api/v1/incidents/{id}/actions`, `/api/v1/actions/{id}/approve`,
+  `/reject`, and `/execute`.
+- Static dashboard shell in `frontend/`.
+- Safe LAB ONLY telemetry scripts in `attacks/` and demo checklist in
+  `demo/full_attack_chain/`.
+- Final documentation in `docs/mitre-visualization.md`, `docs/observability.md`,
+  `docs/llm-cost-token-control.md`, `docs/ai-evaluation.md`,
+  `docs/security-hardening.md`, `docs/testing.md`, and `docs/mvp-scope.md`.
+
+The default active-response provider is offline: it records an approved BLOCK_IP
+execution result and marks the incident `CONTAINED` without contacting a real
+Wazuh manager. Replace the `SIEMProvider` adapter when enabling a real Wazuh API.
+
 ## Definition of Done — Phase 3
 
 ```bash
@@ -170,6 +247,8 @@ Nguồn Wazuh chính thức mô tả custom integration nhận lần lượt ale
 
 Đây là MVP của luồng Wazuh Manager → webhook ký HMAC → FastAPI → PostgreSQL,
 với Phase 4 canonical normalization, Phase 5 offline-first threat intelligence
-enrichment, và Phase 6 rule-based incident correlation cho downstream services.
-Wazuh API/Indexer polling, real external threat-intel providers, AI, frontend và
-active response là các phase tiếp theo, chưa được triển khai trong codebase này.
+enrichment, Phase 6 rule-based incident correlation, Phase 7 offline AI incident
+triage, Phase 8 prompt-injection protection, và Phase 9 offline RAG knowledge
+base cho downstream services. Wazuh API/Indexer polling, real external
+threat-intel providers, real LLM provider calls, frontend và active response là
+các phase tiếp theo, chưa được triển khai trong codebase này.

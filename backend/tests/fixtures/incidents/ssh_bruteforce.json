@@ -1,0 +1,13 @@
+{
+  "name": "ssh_bruteforce",
+  "expected_classification": "true_positive",
+  "expected_mitre_ids": ["T1110", "T1078"],
+  "expected_min_severity": "high",
+  "incident": {
+    "title": "Possible brute-force authentication chain for root on linux-server",
+    "primary_host": "linux-server",
+    "primary_user": "root",
+    "primary_src_ip": "10.10.10.50",
+    "alert_count": 47
+  }
+}

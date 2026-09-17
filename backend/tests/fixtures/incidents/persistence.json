@@ -1,0 +1,12 @@
+{
+  "name": "persistence",
+  "expected_classification": "needs_investigation",
+  "expected_mitre_ids": ["T1053"],
+  "expected_min_severity": "high",
+  "incident": {
+    "title": "Possible persistence chain on win-endpoint",
+    "primary_host": "win-endpoint",
+    "primary_user": "lab-user",
+    "alert_count": 4
+  }
+}

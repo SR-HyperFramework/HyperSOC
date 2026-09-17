@@ -13,6 +13,7 @@ services:
         condition: service_healthy
     volumes:
       - ./backend:/app
+      - ./knowledge:/app/knowledge:ro
 
   postgres:
     image: postgres:16-alpine

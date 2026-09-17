@@ -126,6 +126,11 @@ Example correlation response:
   lookups unless `refresh_threat_intel=true` is requested.
 - The current APIs are lab/local endpoints until later authentication, RBAC, and
   rate limiting phases are implemented.
-- Incident AI fields are intentionally empty in Phase 6.
+- Phase 7 AI triage consumes correlated incidents produced by this service; it
+  does not change correlation behavior or run from the signed ingest endpoint.
+- Phase 8 prompt-injection protection sanitizes AI-bound incident evidence after
+  normalization/correlation and before provider analysis.
+- Incident AI fields are intentionally empty in Phase 6 and populated only by the
+  later triage path.
 - Raw log content remains untrusted evidence and must not be passed directly to an
   LLM in later phases.
