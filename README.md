@@ -1,50 +1,91 @@
 # AI SOC Lab
 
-Backend nhận alert từ Wazuh, normalize, và lưu vào PostgreSQL. Xem `AI SOC Lab Implementation Plan.md` ở thư mục cha để biết toàn bộ roadmap.
+AI SOC Lab is an offline-first security operations center (SOC) MVP. It ingests
+signed Wazuh alerts, stores them in PostgreSQL, normalizes and enriches evidence,
+correlates incidents, performs schema-validated AI triage, and supports
+human-approved containment simulations.
 
-## Chạy local (cần Docker)
+The implementation roadmap is available in
+[`../AI SOC Lab Implementation Plan.md`](../AI%20SOC%20Lab%20Implementation%20Plan.md).
 
-Tạo cấu hình local từ template và thay secret bằng một giá trị ngẫu nhiên:
+## MVP capabilities
+
+```text
+Wazuh signed alert ingestion
+→ canonical alert normalization
+→ offline threat-intelligence enrichment
+→ rule-based incident correlation
+→ offline AI triage with prompt-injection controls and local RAG context
+→ analyst/dashboard APIs and static dashboard shell
+→ human-approved BLOCK_IP action
+→ offline Wazuh Active Response simulation
+```
+
+The default providers are deterministic and offline. Local testing and demos do
+not require API keys, internet access, Qdrant, a real LLM endpoint, or a real
+Wazuh API client.
+
+## Quick start
+
+### Prerequisites
+
+- Docker Engine with Docker Compose v2
+- A random `APP_SECRET_KEY`; do not use the placeholder value or commit a real
+  secret
+
+### Start the local stack
+
+Create local configuration from the template, replace `APP_SECRET_KEY` with a
+random value, then build and start the services:
 
 ```bash
 cp .env.example .env
+# Edit .env and replace APP_SECRET_KEY with a long random secret.
 docker compose up -d --build
 docker compose exec backend alembic upgrade head
 ```
 
-Kiểm tra:
+Verify health and database readiness:
 
 ```bash
 curl -fsS http://localhost:8000/health
 curl -fsS http://localhost:8000/ready
 ```
 
-Compose chỉ chạy backend, PostgreSQL và Redis dự phòng; Wazuh Manager,
-Indexer và Dashboard hiện có của bạn không bị thay thế hay chạy thêm.
-PostgreSQL/Redis chỉ cần mạng nội bộ Compose; backend là dịch vụ duy nhất
-công bố cổng 8000.
+Compose starts the backend, PostgreSQL, and a reserved Redis service. It does
+**not** replace, start, or reconfigure an existing Wazuh Manager, Indexer, or
+Dashboard. PostgreSQL and Redis remain on the private Compose network; the
+backend is the only service that publishes port `8000`.
 
-## Chạy test (không cần Postgres, dùng fake session)
+## Run tests
+
+Run the backend test suite in Docker:
 
 ```bash
-cd backend
-python3 -m venv .venv
-.venv/bin/pip install -r requirements.txt pytest httpx
-.venv/bin/python -m pytest tests/ -v
+ENV_FILE=.env.example docker compose run --rm --no-deps backend sh -lc \
+  'pip install --quiet pytest httpx && python -m pytest tests/ -v'
 ```
 
-## Nối Wazuh hiện có vào backend (Phase 3)
+The suite covers normalization, IOC extraction and enrichment, correlation, AI
+triage schema validation, prompt sanitization, RAG retrieval, analyst and
+dashboard APIs, response policy validation, offline active response, signed
+ingestion, and replay-safe deduplication.
 
-Xem hướng dẫn đầy đủ, topology và troubleshooting tại
-[`docs/wazuh-integration.md`](docs/wazuh-integration.md). Tóm tắt:
+See [`docs/testing.md`](docs/testing.md) for the security test checklist and
+additional verification guidance.
 
-1. Trên Wazuh Manager, cài `integrations/wazuh/custom-ai-soc.py` vào
-   `/var/ossec/integrations/custom-ai-soc.py` với owner `root:wazuh` và mode
+## Connect an existing Wazuh Manager
+
+Read the full topology, setup, and troubleshooting guide in
+[`docs/wazuh-integration.md`](docs/wazuh-integration.md). In summary:
+
+1. Install `integrations/wazuh/custom-ai-soc.py` on the Wazuh Manager as
+   `/var/ossec/integrations/custom-ai-soc.py`, owned by `root:wazuh` with mode
    `750`.
-2. Đặt cùng một secret ngẫu nhiên vào `APP_SECRET_KEY` của backend và thẻ
-   `<api_key>` của Wazuh. Không commit secret thật.
-3. Trong `/var/ossec/etc/ossec.conf`, dùng URL **routable từ manager** (không
-   dùng `backend` hoặc `localhost` trừ khi chạy cùng host):
+2. Configure the same random secret as the backend's `APP_SECRET_KEY` and the
+   Wazuh integration's `<api_key>`. Never commit the real secret.
+3. Use an endpoint that is routable **from the Manager**. Do not use `backend`
+   or `localhost` unless the backend runs on the same host as the Manager:
 
    ```xml
    <integration>
@@ -55,87 +96,64 @@ Xem hướng dẫn đầy đủ, topology và troubleshooting tại
    </integration>
    ```
 
-4. Restart `wazuh-manager` và theo dõi
-   `/var/ossec/logs/integrations.log`. Tạo một alert lab an toàn rồi kiểm tra
-   `GET /api/v1/alerts`; alert mới trả `201`, replay cùng fingerprint trả `200`.
+4. Restart `wazuh-manager`, monitor `/var/ossec/logs/integrations.log`, create
+   safe lab telemetry, and check `GET /api/v1/alerts`. A new alert returns
+   `201`; a replay with the same fingerprint returns `200`.
 
-`POST /api/v1/alerts` yêu cầu HMAC headers `X-SOC-Timestamp` và
-`X-SOC-Signature`; payload được giữ nguyên dưới `raw` sau khi chuẩn hóa.
+`POST /api/v1/alerts` requires `X-SOC-Timestamp` and `X-SOC-Signature` HMAC
+headers. The full event remains stored as `raw` for provenance, while downstream
+services use bounded normalized evidence rather than parsing raw Wazuh JSON.
 
-## Phase 4 — Canonical Normalization Layer
+## Core workflow
 
-Phase 3's manager adapter still sends the signed transport envelope
-`source` / `timestamp` / `agent` / `rule` / `event` / `raw`. Phase 4 adds a
-backend-owned, provider-neutral `NormalizedAlert` for future enrichment and
-correlation; it does **not** change the manager configuration, webhook format,
-or current flat alert API.
+### Alert normalization
 
-The pure entry point is `app.services.normalization.normalize_wazuh_alert()`. It
-accepts either native Wazuh JSON or the existing Phase 3 envelope (using its
-`raw` member when available) and returns typed sections:
+The Wazuh adapter sends a signed transport envelope containing:
+
+```text
+source, timestamp, agent, rule, event, raw
+```
+
+`app.services.normalization.normalize_wazuh_alert()` converts native Wazuh JSON
+or the envelope into the provider-neutral `NormalizedAlert` contract:
 
 ```text
 id, timestamp, host, identity, network, process, file, detection, raw_ref
 ```
 
-Supported Wazuh evidence families are Windows authentication, Sysmon,
-PowerShell, Linux SSH, auditd, FIM, and nginx. The canonical sections preserve
-stable correlation/enrichment fields such as host id/name/IP, auth actor/target
-and outcome, network IP/port/domain/URL/DNS data, process image/command/parent
-metadata, file path/hash/action, rule metadata, event family/kind, status,
-outcome, provider, decoder, groups, and MITRE IDs.
+The normalizer supports Windows authentication, Sysmon, PowerShell, Linux SSH,
+auditd, file-integrity monitoring, and nginx evidence families. Missing or
+malformed optional fields are omitted rather than inferred. Native event content
+remains untrusted; `raw_ref` is provenance metadata only.
 
-Missing or malformed optional fields become absent canonical evidence rather
-than inferred values. `NormalizedAlert.id` is a canonical UUID supplied by the
-caller or generated locally; the native Wazuh alert id remains `raw_ref`
-provenance. Native log content remains untrusted; `raw_ref` is only provenance
-metadata, while the full raw event remains in the existing Phase 3 storage path.
-Sanitization for LLM use is a later phase.
+### Threat-intelligence enrichment
 
-## Phase 5 — Threat Intelligence Enrichment
+Phase 5 enriches bounded IOC values extracted from normalized evidence. Supported
+indicator types are `ip`, `domain`, `hash`, and `url`. Results include sanitized
+provider metadata, a risk score, verdict, cache state, and expiration metadata.
 
-Phase 5 adds offline-first IOC enrichment before future AI/correlation work. The
-backend enriches bounded indicators extracted from the Phase 4 `NormalizedAlert`
-contract; it does not query or embed raw Wazuh JSON in enrichment output.
-
-Supported indicator types are `ip`, `domain`, `hash`, and `url`. Results follow a
-unified shape with `indicator`, `type`, sanitized `providers`, `risk_score`,
-`verdict`, `cached`, `cached_until`, and `last_lookup_at`. Cache TTLs match the
-roadmap: IP and URL results cache for 6 hours, domains for 12 hours, and hashes
-for 24 hours.
-
-The default provider mode is deterministic and offline, so local testing does not
-require VirusTotal, AbuseIPDB, URLHaus, Redis, or internet access. External
-provider settings remain placeholders for a later pass.
-
-Example API calls:
+The default deterministic provider works offline. Cache durations are six hours
+for IPs and URLs, 12 hours for domains, and 24 hours for hashes.
 
 ```bash
-curl -fsS 'http://localhost:8000/api/v1/threat-intel/lookup?type=ip&indicator=10.10.10.50'
+curl -fsS 'http://localhost:8000/api/v1/threat-intel/lookup?type=ip&indicator=198.51.100.42'
 curl -fsS -X POST 'http://localhost:8000/api/v1/alerts/<alert-id>/threat-intel'
 curl -fsS 'http://localhost:8000/api/v1/alerts/<alert-id>/threat-intel'
 ```
 
-Threat-intel cache rows are stored separately from `alerts.raw_event`, and alert
-associations are replay-safe. See
-[`docs/threat-intelligence.md`](docs/threat-intelligence.md) for the detailed
-contract and offline provider behavior.
+See [`docs/threat-intelligence.md`](docs/threat-intelligence.md) for the full
+contract and provider behavior.
 
-## Phase 6 — Rule-based Correlation Engine
+### Incident correlation
 
-Phase 6 turns related normalized/enriched alerts into incidents without using AI.
-The correlation engine consumes persisted alerts through the Phase 4
-`normalize_persisted_alert()` bridge and may read sanitized Phase 5 enrichment
-associations; it does not parse raw Wazuh JSON directly and does not run from the
-signed ingest endpoint.
+The rule-based correlation engine creates or updates incidents from related
+persisted alerts. It uses normalized evidence and sanitized enrichment summaries;
+it does not parse raw Wazuh JSON directly and is not invoked by the signed ingest
+endpoint.
 
-The first rules are deterministic: related alerts sharing host and source IP
-within the default 10-minute window become one incident, with additional scoring
-for brute-force, PowerShell, persistence, and malware/hash chains. Incidents keep
-status, severity, confidence, first/last seen timestamps, primary host/user/source
-IP, MITRE IDs, alert count, and related alert IDs.
-
-Example API calls:
+The initial deterministic rules correlate alerts that share a host and source IP
+within the default 10-minute window. Additional logic scores brute-force,
+PowerShell, persistence, and malware/hash chains.
 
 ```bash
 curl -fsS -X POST 'http://localhost:8000/api/v1/correlation/run' \
@@ -148,107 +166,150 @@ curl -fsS 'http://localhost:8000/api/v1/incidents/<incident-id>'
 See [`docs/correlation.md`](docs/correlation.md) for rule details and
 idempotency behavior.
 
-## Phase 7 — Offline AI Incident Triage
+### Offline AI triage and prompt-injection protection
 
-Phase 7 adds incident-level AI triage after correlation. The triage service builds
-a bounded context from the incident, Phase 4 normalized alert evidence, and Phase
-5 sanitized enrichment summaries; it does not send `alerts.raw_event`, native
-Wazuh JSON, signed ingest bodies, or raw provider payloads to the AI provider.
+AI triage builds a bounded context from the incident, normalized alert evidence,
+and sanitized enrichment summaries. It does **not** send raw event JSON, signed
+ingest bodies, or raw provider payloads to the AI provider.
 
-The default provider is deterministic and offline, so local tests and demos do not
-require a real LLM endpoint, internet access, or API keys. A successful run stores
-a short validated summary in `incidents.ai_summary` and compact schema-validated
-JSON in `incidents.ai_analysis`. AI recommendations are advisory only and do not
-execute response actions or automatically change incident lifecycle fields.
-
-Example API calls:
+The default provider is deterministic and offline. Successful runs store a short
+validated summary in `incidents.ai_summary` and schema-validated JSON in
+`incidents.ai_analysis`.
 
 ```bash
-curl -fsS -X POST 'http://localhost:8000/api/v1/incidents/<incident-id>/ai-triage' \
+curl -fsS -X POST 'http://localhost:8000/api/v1/incidents/<incident-id>/triage' \
   -H 'Content-Type: application/json' \
   -d '{"force":true}'
-curl -fsS 'http://localhost:8000/api/v1/incidents/<incident-id>'
+curl -fsS 'http://localhost:8000/api/v1/incidents/<incident-id>/analysis'
 ```
 
-See [`docs/ai-triage.md`](docs/ai-triage.md) for the strict output schema,
-configuration, and security boundaries.
+All untrusted event text passes through the sanitizer and is serialized inside
+`<UNTRUSTED_EVENT_DATA>` boundaries for AI providers. The sanitizer removes
+control and binary-like data, redacts secret-like values, truncates long fields,
+and limits context size, JSON depth, and list lengths.
 
-## Phase 8 — Prompt Injection Protection
+AI output is advisory only. It must pass strict Pydantic schema validation and
+cannot automatically execute actions or change an incident lifecycle state.
 
-Phase 8 makes the AI triage boundary explicit: normalized incident evidence passes
-through a dedicated sanitizer before provider analysis, then is serialized as
-structured JSON inside `<UNTRUSTED_EVENT_DATA>` delimiters for future real LLM
-providers. The sanitizer strips control characters, removes binary-like values and
-huge blobs, redacts secret-like tokens, truncates long fields, and caps context
-size, JSON depth, and list lengths.
+See:
 
-See [`docs/prompt-injection-protection.md`](docs/prompt-injection-protection.md)
-for the sanitizer controls and prompt boundary.
+- [`docs/ai-triage.md`](docs/ai-triage.md)
+- [`docs/prompt-injection-protection.md`](docs/prompt-injection-protection.md)
+- [`docs/llm-cost-token-control.md`](docs/llm-cost-token-control.md)
 
-## Phase 9 — Offline RAG Knowledge Base
+### Offline RAG knowledge base
 
-Phase 9 adds a local SOC knowledge base for MITRE ATT&CK, Wazuh notes, Sigma
-explanations, internal playbooks, and Windows/Linux references. Markdown documents
-are chunked deterministically and searched offline through a replaceable
-`VectorStore` interface. Retrieved chunks populate AI triage MITRE/playbook
-context and remain subject to Phase 8 sanitization and strict output validation.
+The local knowledge base provides MITRE ATT&CK, Wazuh, Sigma, SOC playbook, and
+Windows/Linux reference material. Markdown documents are chunked
+deterministically and searched through a replaceable `VectorStore` interface.
+Retrieved chunks add bounded MITRE and playbook context to AI triage and remain
+subject to sanitization and output validation.
 
 ```bash
 curl -fsS -X POST 'http://localhost:8000/api/v1/knowledge/index'
 curl -fsS 'http://localhost:8000/api/v1/knowledge/search?mitre_ids=T1110&alert_types=ssh&top_k=5'
 ```
 
-The default mode requires no Qdrant, embeddings, network access, or API keys. See
-[`docs/knowledge-base.md`](docs/knowledge-base.md) for sources, metadata, limits,
-and retrieval behavior.
+The default mode requires no embeddings service, Qdrant, network connection, or
+API key. See [`docs/knowledge-base.md`](docs/knowledge-base.md) for source,
+metadata, chunking, and retrieval details.
 
-## Phases 10–22 — Analyst workflow through MVP closure
+## Analyst and response APIs
 
-Later roadmap phases add analyst-facing APIs, a static dashboard shell, response
-action approval/execution flow, MITRE visualization guidance, safe lab automation,
-observability/cost/eval/hardening/testing docs, and final MVP scope tracking.
+### Dashboard and incident analysis
 
-Key additions:
-
-- Analyst APIs: `/api/v1/incidents/{id}/triage`, `/reanalyze`, `/analysis`, and
-  `/api/v1/dashboard/{summary,mitre,timeline}`.
-- Response APIs: `/api/v1/incidents/{id}/actions`, `/api/v1/actions/{id}/approve`,
-  `/reject`, and `/execute`.
-- Static dashboard shell in `frontend/`.
-- Safe LAB ONLY telemetry scripts in `attacks/` and demo checklist in
-  `demo/full_attack_chain/`.
-- Final documentation in `docs/mitre-visualization.md`, `docs/observability.md`,
-  `docs/llm-cost-token-control.md`, `docs/ai-evaluation.md`,
-  `docs/security-hardening.md`, `docs/testing.md`, and `docs/mvp-scope.md`.
-
-The default active-response provider is offline: it records an approved BLOCK_IP
-execution result and marks the incident `CONTAINED` without contacting a real
-Wazuh manager. Replace the `SIEMProvider` adapter when enabling a real Wazuh API.
-
-## Definition of Done — Phase 3
-
-```bash
-curl -fsS 'http://localhost:8000/api/v1/alerts?limit=50'
+```text
+GET  /api/v1/dashboard/summary
+GET  /api/v1/dashboard/mitre
+GET  /api/v1/dashboard/timeline
+GET  /api/v1/incidents
+GET  /api/v1/incidents/{incident_id}
+POST /api/v1/incidents/{incident_id}/triage
+POST /api/v1/incidents/{incident_id}/reanalyze
+GET  /api/v1/incidents/{incident_id}/analysis
 ```
 
-phải trả về alert vừa được Wazuh forward sang. Chi tiết xác nhận end-to-end
-với manager hiện có nằm trong tài liệu tích hợp.
+A static dashboard shell and endpoint mapping are available in `frontend/`.
+The MITRE visualization contract is documented in
+[`docs/mitre-visualization.md`](docs/mitre-visualization.md).
 
-## Tài liệu tham khảo
+### Human-in-the-loop response actions
+
+```text
+POST /api/v1/incidents/{incident_id}/actions
+GET  /api/v1/incidents/{incident_id}/actions
+POST /api/v1/actions/{action_id}/approve
+POST /api/v1/actions/{action_id}/reject
+POST /api/v1/actions/{action_id}/execute
+```
+
+The MVP supports only `BLOCK_IP` actions. An action is created as `PENDING` and
+requires explicit analyst approval before it can be executed. Policy validation
+runs at request and approval time, and execution accepts only `APPROVED` actions.
+
+The default provider is an **offline Wazuh Active Response simulation**. It
+records a structured result, changes the action to `SUCCESS`, and marks the
+incident `CONTAINED`; it does not contact a real Wazuh Manager or alter a
+firewall. Replace the `SIEMProvider` adapter only when a reviewed, real Wazuh API
+integration is ready.
+
+The policy rejects unsupported action types, malformed IP addresses, localhost,
+unspecified, link-local, multicast, allowlisted/denylisted targets, and private
+management subnets by default.
+
+## Security boundaries
+
+- Never store or log real API keys, Wazuh credentials, or application secrets.
+- Treat external alerts, knowledge documents, and threat-intelligence responses
+  as untrusted input.
+- Keep raw Wazuh events outside AI triage context.
+- Require strict schema validation for all AI output.
+- Never permit LLM-generated shell, Bash, PowerShell, or arbitrary executable
+  response actions.
+- Require human approval and policy validation for every containment action.
+- Keep the scripts under `attacks/` in isolated laboratory environments only.
+
+See [`docs/security-hardening.md`](docs/security-hardening.md) for production
+hardening requirements, including JWT authentication, RBAC, rate limiting,
+secret management, audit logging, restrictive CORS, and request-size limits.
+
+## Lab automation and demo
+
+`attacks/` contains **LAB ONLY** benign telemetry generators and documentation;
+it does not contain credential attacks, destructive payloads, malware, or
+evasion functionality. The end-to-end demo checklist is in
+[`demo/full_attack_chain/README.md`](demo/full_attack_chain/README.md).
+
+Additional operational documentation:
+
+- [`docs/observability.md`](docs/observability.md)
+- [`docs/ai-evaluation.md`](docs/ai-evaluation.md)
+- [`docs/testing.md`](docs/testing.md)
+- [`docs/mvp-scope.md`](docs/mvp-scope.md)
+
+## MVP scope
+
+Implemented:
+
+```text
+Signed Wazuh ingest, normalization, offline enrichment, correlation,
+offline AI triage, prompt-injection protection, local RAG, analyst APIs,
+dashboard shell, human-approved BLOCK_IP actions, offline active-response
+simulation, safe lab/demo scaffolding, and supporting documentation.
+```
+
+Deliberately deferred:
+
+```text
+Full SOAR, multi-tenancy, complex ML detection, production JWT/RBAC
+enforcement, real external LLM calls, a real Wazuh active-response client,
+and a large integration catalog.
+```
+
+See [`docs/mvp-scope.md`](docs/mvp-scope.md) for the detailed boundary and demo
+story.
+
+## References
 
 - [Wazuh external API integration](https://documentation.wazuh.com/current/user-manual/manager/integration-with-external-apis.html)
-- [Hướng dẫn nối Wazuh hiện có](docs/wazuh-integration.md)
-
-Nguồn Wazuh chính thức mô tả custom integration nhận lần lượt alert file,
-`api_key` và `hook_url`, yêu cầu tên script bắt đầu bằng `custom-`, executable
-`root:wazuh`, và `alert_format` là `json`.
-
-## Status
-
-Đây là MVP của luồng Wazuh Manager → webhook ký HMAC → FastAPI → PostgreSQL,
-với Phase 4 canonical normalization, Phase 5 offline-first threat intelligence
-enrichment, Phase 6 rule-based incident correlation, Phase 7 offline AI incident
-triage, Phase 8 prompt-injection protection, và Phase 9 offline RAG knowledge
-base cho downstream services. Wazuh API/Indexer polling, real external
-threat-intel providers, real LLM provider calls, frontend và active response là
-các phase tiếp theo, chưa được triển khai trong codebase này.
+- [`docs/wazuh-integration.md`](docs/wazuh-integration.md)
