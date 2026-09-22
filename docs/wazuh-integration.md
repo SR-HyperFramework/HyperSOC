@@ -120,6 +120,51 @@ HTTP `200` and does not create a second row. The read endpoint is intended for
 local/lab inspection; place it behind the same access controls as the rest of
 the backend before exposing it to analysts.
 
+## Active response
+
+Containment is simulated by default. Only switch to the real client once the
+approval flow has been exercised in the lab, because an executed action changes
+agent firewall state.
+
+```dotenv
+WAZUH_ACTIVE_RESPONSE_PROVIDER_MODE=wazuh
+WAZUH_API_URL=https://wazuh-manager.internal:55000
+WAZUH_API_USERNAME=<api user>
+WAZUH_API_PASSWORD=<api password>
+WAZUH_API_VERIFY_TLS=true
+WAZUH_ACTIVE_RESPONSE_AGENTS=001,002
+WAZUH_ACTIVE_RESPONSE_COMMAND=firewall-drop
+WAZUH_ACTIVE_RESPONSE_TIMEOUT_SECONDS=10
+```
+
+`WAZUH_ACTIVE_RESPONSE_COMMAND` must match the `<command><name>` defined in the
+manager's `ossec.conf`. Deployments that invoke a script under
+`active-response/bin` instead of a configured command name use the `!` prefix
+form, for example `!firewall-drop`. Confirm the value against your own manager
+before the first execution.
+
+`WAZUH_ACTIVE_RESPONSE_AGENTS` must list explicit numeric agent ids. The values
+`all` and `*` are rejected at startup in `wazuh` mode, so a single approval
+cannot fan out to the entire fleet. `WAZUH_API_VERIFY_TLS` defaults to `true`;
+set it to `false` only for a lab manager using a self-signed certificate.
+
+On execute, the backend authenticates against `POST /security/user/authenticate`
+and sends `PUT /active-response?agents_list=...` with the approved target in
+`alert.data.srcip`. A fresh token is requested per execution, so no credential
+or token is cached.
+
+### Containment is reported strictly
+
+The action is only marked `SUCCESS` — and the incident only moves to
+`CONTAINED` — when the manager reports zero failed items and affects every
+requested agent. Partial delivery is recorded as `FAILED` with
+`total_affected_items`, `total_failed_items`, and `failed_error_codes` kept in
+`execution_result`, so a half-applied block is never mistaken for containment.
+
+Transport failures, rejected credentials, and malformed responses raise a
+`SIEMResponseError`, which marks the action `FAILED` and returns HTTP `409`.
+Error messages deliberately exclude the configured API username and password.
+
 ## Troubleshooting and rollback
 
 - **No request in the backend:** confirm the manager can route to the SOC host,

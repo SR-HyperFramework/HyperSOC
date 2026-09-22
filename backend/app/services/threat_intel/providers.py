@@ -4,7 +4,13 @@ import ipaddress
 from typing import Protocol
 from urllib.parse import urlsplit
 
+from app.core.config import settings
 from app.schemas.threat_intel import ThreatIntelProviderResult
+from app.services.threat_intel.external import (
+    AbuseIPDBProvider,
+    URLhausProvider,
+    VirusTotalProvider,
+)
 
 
 class ThreatIntelProvider(Protocol):
@@ -168,20 +174,28 @@ class OfflineThreatIntelProvider:
         )
 
 
-class DisabledThreatIntelProvider:
-    """Placeholder for external providers until network lookups are enabled."""
+def build_threat_intel_providers(provider_mode: str | None = None) -> list[ThreatIntelProvider]:
+    """Offline reputation always runs; external providers are added per configured credential."""
+    providers: list[ThreatIntelProvider] = [OfflineThreatIntelProvider()]
+    mode = provider_mode or settings.threat_intel_provider_mode
+    if mode == "offline" or not settings.threat_intel_enable_external_providers:
+        return providers
 
-    def __init__(self, name: str, supported_types: set[str] | frozenset[str]) -> None:
-        self.name = name
-        self.supported_types = frozenset(supported_types)
-
-    async def lookup(self, indicator_type: str, indicator: str) -> ThreatIntelProviderResult:
-        return ThreatIntelProviderResult(
-            provider=self.name,
-            verdict="unknown",
-            risk_score=0,
-            confidence=0,
-            summary="External provider is configured as disabled in offline-first mode",
-            error="provider_disabled",
-            metadata={"indicator_type": indicator_type},
+    timeout_seconds = settings.threat_intel_lookup_timeout_seconds
+    if settings.virustotal_api_key:
+        providers.append(
+            VirusTotalProvider(api_key=settings.virustotal_api_key, timeout_seconds=timeout_seconds)
         )
+    if settings.abuseipdb_api_key:
+        providers.append(
+            AbuseIPDBProvider(api_key=settings.abuseipdb_api_key, timeout_seconds=timeout_seconds)
+        )
+    if settings.urlhaus_api_url:
+        providers.append(
+            URLhausProvider(
+                base_url=settings.urlhaus_api_url,
+                auth_key=settings.urlhaus_auth_key,
+                timeout_seconds=timeout_seconds,
+            )
+        )
+    return providers

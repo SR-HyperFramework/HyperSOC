@@ -27,7 +27,7 @@ from app.services.threat_intel.indicators import (
     canonicalize_indicator,
     extract_indicators,
 )
-from app.services.threat_intel.providers import OfflineThreatIntelProvider, ThreatIntelProvider
+from app.services.threat_intel.providers import ThreatIntelProvider, build_threat_intel_providers
 from app.services.threat_intel.scoring import aggregate_indicator_verdicts, aggregate_provider_results
 from app.services.wazuh import normalize_persisted_alert
 
@@ -64,7 +64,7 @@ class ThreatIntelService:
         *,
         clock: Callable[[], datetime] = _utc_now,
     ) -> None:
-        self.providers = list(providers) if providers is not None else [OfflineThreatIntelProvider()]
+        self.providers = list(providers) if providers is not None else build_threat_intel_providers()
         self._clock = clock
 
     async def lookup_ip(self, db: AsyncSession, indicator: Any, *, refresh: bool = False) -> ThreatIntelResultOut:

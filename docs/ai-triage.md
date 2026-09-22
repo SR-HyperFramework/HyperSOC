@@ -2,8 +2,9 @@
 
 Phase 7 analyzes correlated incidents after Wazuh alerts have already moved through
 normalization, threat-intelligence enrichment, and rule-based correlation. The
-first implementation is offline-first and deterministic so local tests and demos do
-not require a real LLM provider, network access, or API keys.
+default implementation is offline-first and deterministic so local tests and demos
+do not require a hosted provider, network access, or API keys. TypeSafe Jev is
+available as an opt-in decision provider for fast, typed incident classification.
 
 ## Scope
 
@@ -50,11 +51,44 @@ AI_TRIAGE_BINARY_PLACEHOLDER=[BINARY_DATA_STRIPPED]
 LLM_BASE_URL=
 LLM_API_KEY=
 LLM_MODEL=
+TYPESAFE_API_KEY=
+TYPESAFE_BASE_URL=
+TYPESAFE_MODEL=jev-latest
 ```
 
-`LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` are placeholders for future
-non-offline providers. Do not commit real secrets. Offline mode does not require
-any of these values.
+To enable Jev, create an API key in the TypeSafe console and set:
+
+```dotenv
+AI_TRIAGE_PROVIDER_MODE=jev
+TYPESAFE_API_KEY=<secret>
+TYPESAFE_MODEL=jev-latest
+```
+
+`TYPESAFE_BASE_URL` is optional and defaults to the TypeSafe API. Do not commit
+real secrets. `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` remain placeholders
+for other future providers. Offline mode does not require any provider values.
+
+## Jev decision workflow
+
+Jev is used for the part of triage that fits a System One model: narrow decisions
+with a closed output space. One API request evaluates three independent questions
+in parallel:
+
+```text
+classification: true_positive | false_positive | needs_investigation | unknown
+severity:       low | medium | high | critical
+false_positive_probability: 0.0 .. 1.0
+```
+
+The confidence written to `AITriageResult` is the conservative minimum of the
+classification and severity confidence values. Free-form narrative is deliberately
+not requested from Jev. The backend deterministically renders the summary, attack
+chain, MITRE references, evidence paths, IOC analysis, investigation steps, and
+advisory actions from the sanitized incident context.
+
+This keeps code in control of the workflow and avoids treating a structured
+decision model as a text generator. `needs_human_review` remains `true`, and Jev
+cannot directly change incident state or execute a response action.
 
 ## Security boundary
 
@@ -64,8 +98,10 @@ agents, rule descriptions, and script-like fields as untrusted evidence. Phase 8
 runs a dedicated `PromptSanitizer` before provider analysis: it strips control
 characters, removes binary-like values and huge blobs, truncates long values,
 redacts secret-looking tokens, caps JSON depth/list sizes, and records sanitizer
-metadata. Future real-provider prompts wrap sanitized structured JSON in
-`<UNTRUSTED_EVENT_DATA>` delimiters. See
+metadata. Text-provider prompts wrap sanitized structured JSON in
+`<UNTRUSTED_EVENT_DATA>` delimiters. The Jev provider sends the same sanitized
+`AITriageContext` as structured state and repeats the untrusted-evidence rule in
+every atomic question. See
 [`prompt-injection-protection.md`](prompt-injection-protection.md).
 
 Provider output must validate against the strict Phase 7 schema before it is
@@ -156,5 +192,7 @@ Example response shape:
   rate limiting phases are implemented.
 - Offline triage is a deterministic analyst aid, not an external threat-intel or
   hosted LLM assertion.
+- Jev failures map to `503 Service Unavailable`; structurally invalid Jev answers
+  map to `502 Bad Gateway` and are never persisted.
 - AI recommendations are advisory until the later human-in-the-loop response
   phases add approval and policy enforcement.

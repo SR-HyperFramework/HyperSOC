@@ -24,6 +24,8 @@ false-positive handling
 
 ## Current status
 
-The offline provider is deterministic and schema-validated. These fixtures define
-the target behavior for a future real LLM provider, where runs should be compared
-against expected classification, severity, MITRE IDs, and hallucination checks.
+The offline provider is deterministic and schema-validated. The Jev provider can
+be evaluated against the same fixtures for classification, severity, false-positive
+probability, confidence calibration, and prompt-injection resistance. MITRE IDs,
+evidence references, and recommendations remain deterministic backend output and
+should be checked separately from Jev's typed decisions.

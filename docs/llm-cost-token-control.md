@@ -14,6 +14,7 @@ The current AI triage context builder enforces:
 - strict `AITriageResult` schema validation
 - sanitized RAG context limits through `RAG_TOP_K`, `RAG_MAX_CHUNK_CHARS`, and
   `RAG_MAX_CONTEXT_CHARS`
+- one batched Jev call containing three parallel, atomic questions
 
 ## Prioritization policy
 
@@ -28,6 +29,8 @@ When context must be reduced, prefer evidence in this order:
 
 ## Provider guidance
 
-The offline provider is the default. A real provider must add request/response
-usage logging, timeout handling, schema validation, and cost monitoring before it
-is enabled outside a lab.
+The offline provider remains the default. The Jev provider uses the configured
+`AI_TRIAGE_TIMEOUT_SECONDS`, accepts only typed Choice/Noul answers, validates
+all values before persistence, and keeps the existing incident context bounds.
+Production deployments should additionally export TypeSafe request usage and
+latency into the observability stack and alert on provider errors and cost drift.

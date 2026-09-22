@@ -9,12 +9,19 @@ class Settings(BaseSettings):
     wazuh_api_url: str = ""
     wazuh_api_username: str = ""
     wazuh_api_password: str = ""
+    wazuh_api_verify_tls: bool = True
     wazuh_active_response_provider_mode: str = "offline"
     wazuh_active_response_agents: str = "all"
+    wazuh_active_response_command: str = "firewall-drop"
+    wazuh_active_response_timeout_seconds: int = 10
 
     llm_base_url: str = ""
     llm_api_key: str = ""
     llm_model: str = ""
+
+    typesafe_api_key: str = ""
+    typesafe_base_url: str = ""
+    typesafe_model: str = "jev-latest"
 
     ai_triage_provider_mode: str = "offline"
     ai_triage_timeout_seconds: int = 30
@@ -28,6 +35,7 @@ class Settings(BaseSettings):
     virustotal_api_key: str = ""
     abuseipdb_api_key: str = ""
     urlhaus_api_url: str = ""
+    urlhaus_auth_key: str = ""
 
     threat_intel_provider_mode: str = "offline"
     threat_intel_enable_external_providers: bool = False
@@ -72,12 +80,23 @@ class Settings(BaseSettings):
             raise ValueError("AI_TRIAGE_MAX_LIST_ITEMS must be positive")
         if not self.ai_triage_binary_placeholder:
             raise ValueError("AI_TRIAGE_BINARY_PLACEHOLDER must not be empty")
+        if self.wazuh_active_response_provider_mode not in ("offline", "wazuh"):
+            raise ValueError("WAZUH_ACTIVE_RESPONSE_PROVIDER_MODE must be offline or wazuh")
         if self.wazuh_active_response_provider_mode != "offline":
             if not self.wazuh_api_url:
                 raise ValueError("WAZUH_API_URL must be set for non-offline Wazuh active response providers")
             if not self.wazuh_api_username or not self.wazuh_api_password:
                 raise ValueError("WAZUH_API_USERNAME and WAZUH_API_PASSWORD must be set for non-offline Wazuh active response providers")
-        if self.ai_triage_provider_mode != "offline":
+            if not self.wazuh_active_response_command:
+                raise ValueError("WAZUH_ACTIVE_RESPONSE_COMMAND must name the active response command defined in ossec.conf")
+            if self.wazuh_active_response_timeout_seconds <= 0:
+                raise ValueError("WAZUH_ACTIVE_RESPONSE_TIMEOUT_SECONDS must be positive")
+        if self.ai_triage_provider_mode == "jev":
+            if not self.typesafe_api_key:
+                raise ValueError("TYPESAFE_API_KEY must be set for Jev AI triage")
+            if not self.typesafe_model:
+                raise ValueError("TYPESAFE_MODEL must be set for Jev AI triage")
+        elif self.ai_triage_provider_mode != "offline":
             if not self.llm_model:
                 raise ValueError("LLM_MODEL must be set for non-offline AI triage providers")
             if self.ai_triage_provider_mode == "openai_compatible" and not self.llm_base_url:
@@ -90,8 +109,15 @@ class Settings(BaseSettings):
             raise ValueError("RAG_MAX_CONTEXT_CHARS must be positive")
         if self.knowledge_base_provider_mode != "offline" and not self.qdrant_url:
             raise ValueError("QDRANT_URL must be set for non-offline knowledge providers")
-        if self.threat_intel_provider_mode != "offline" and not self.threat_intel_enable_external_providers:
-            raise ValueError("THREAT_INTEL_PROVIDER_MODE must be offline unless external providers are enabled")
+        if self.threat_intel_provider_mode not in ("offline", "external"):
+            raise ValueError("THREAT_INTEL_PROVIDER_MODE must be offline or external")
+        if self.threat_intel_provider_mode != "offline":
+            if not self.threat_intel_enable_external_providers:
+                raise ValueError("THREAT_INTEL_PROVIDER_MODE must be offline unless external providers are enabled")
+            if not (self.virustotal_api_key or self.abuseipdb_api_key or self.urlhaus_api_url):
+                raise ValueError(
+                    "External threat intel requires at least one of VIRUSTOTAL_API_KEY, ABUSEIPDB_API_KEY, or URLHAUS_API_URL"
+                )
         if self.app_secret_key == "change-me":
             raise ValueError("APP_SECRET_KEY must be changed from the default")
 

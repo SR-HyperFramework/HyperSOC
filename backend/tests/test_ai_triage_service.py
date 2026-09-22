@@ -7,12 +7,18 @@ from uuid import UUID
 
 import pytest
 
+from app.core.config import Settings, settings
 from app.models.alert import Alert
 from app.models.incident import Incident, IncidentAlert
 from app.models.threat_intel import AlertThreatIntel, ThreatIntelIndicator
 from app.schemas.ai_triage import AITriageResult, AITriageRunRequest
 from app.schemas.normalized_alert import NormalizedAlert, NormalizedHost, NormalizedNetwork, NormalizedProcess
-from app.services.ai_triage import AITriageService, AITriageValidationError, OfflineAITriageProvider
+from app.services.ai_triage import (
+    AITriageService,
+    AITriageValidationError,
+    JevAITriageProvider,
+    OfflineAITriageProvider,
+)
 from app.schemas.ai_triage import UNTRUSTED_EVENT_DATA_END, UNTRUSTED_EVENT_DATA_START
 from app.services.knowledge_base import KnowledgeBaseService
 
@@ -84,6 +90,22 @@ class _InvalidProvider:
 
     async def analyze(self, _context):
         return {"summary": "missing required strict fields"}
+
+
+class _FakeJevClient:
+    def __init__(self, response) -> None:
+        self.response = response
+        self.calls = []
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, exc_type, exc, traceback):
+        return False
+
+    async def system_one(self, **kwargs):
+        self.calls.append(kwargs)
+        return self.response
 
 
 def _incident() -> Incident:
@@ -221,6 +243,103 @@ def test_offline_provider_returns_valid_structured_result():
     import asyncio
 
     asyncio.run(scenario())
+
+
+def test_jev_provider_maps_parallel_typed_decisions_to_triage_result():
+    async def scenario():
+        response = SimpleNamespace(
+            choices={
+                "classification": SimpleNamespace(choice="true_positive", confidence=0.93),
+                "severity": SimpleNamespace(choice="critical", confidence=0.87),
+            },
+            nouls={"false_positive_probability": SimpleNamespace(noul=0.08)},
+        )
+        client = _FakeJevClient(response)
+        client_options = {}
+
+        def client_factory(**kwargs):
+            client_options.update(kwargs)
+            return client
+
+        context = await AITriageService(provider=OfflineAITriageProvider()).build_context(_db(), _incident())
+        provider = JevAITriageProvider(
+            api_key="test-key",
+            model="jev-latest",
+            timeout_seconds=7,
+            client_factory=client_factory,
+        )
+
+        result = await provider.analyze(context)
+
+        assert result.classification == "true_positive"
+        assert result.severity == "critical"
+        assert result.confidence == 87
+        assert result.false_positive_probability == 8
+        assert result.needs_human_review is True
+        assert result.title.startswith("Jev triage:")
+        assert any("blocking source IP" in action for action in result.recommended_actions)
+        assert client_options == {"api_key": "test-key", "model": "jev-latest", "timeout": 7}
+        assert len(client.calls) == 1
+        request = client.calls[0]
+        assert set(request["questions"]) == {"classification", "severity", "false_positive_probability"}
+        assert request["questions"]["classification"]["type"] == "choice"
+        assert request["questions"]["severity"]["type"] == "choice"
+        assert request["questions"]["false_positive_probability"]["type"] == "noul"
+        state_json = json.dumps(request["state"])
+        assert "raw_event" not in state_json
+        assert "raw_provider_payload" not in state_json
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_jev_provider_rejects_out_of_contract_answers():
+    async def scenario():
+        response = SimpleNamespace(
+            choices={
+                "classification": SimpleNamespace(choice="benign-ish", confidence=0.9),
+                "severity": SimpleNamespace(choice="high", confidence=0.9),
+            },
+            nouls={"false_positive_probability": SimpleNamespace(noul=0.1)},
+        )
+        client = _FakeJevClient(response)
+        provider = JevAITriageProvider(
+            api_key="test-key",
+            client_factory=lambda **_kwargs: client,
+        )
+        context = await AITriageService(provider=OfflineAITriageProvider()).build_context(_db(), _incident())
+
+        with pytest.raises(AITriageValidationError, match="classification"):
+            await provider.analyze(context)
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_service_builds_jev_provider_from_settings(monkeypatch):
+    monkeypatch.setattr(settings, "typesafe_api_key", "configured-key")
+    monkeypatch.setattr(settings, "typesafe_model", "jev-latest")
+    monkeypatch.setattr(settings, "typesafe_base_url", "")
+
+    service = AITriageService(provider_mode="jev")
+
+    assert isinstance(service.provider, JevAITriageProvider)
+    assert service.provider_mode == "jev"
+    assert service.provider.api_key == "configured-key"
+
+
+def test_jev_configuration_requires_api_key():
+    configured = Settings(
+        _env_file=None,
+        app_secret_key="test-secret",
+        ai_triage_provider_mode="jev",
+        typesafe_api_key="",
+    )
+
+    with pytest.raises(ValueError, match="TYPESAFE_API_KEY"):
+        configured.validate_ingest_settings()
 
 
 def test_service_persists_summary_and_validated_json_analysis():
