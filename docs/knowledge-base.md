@@ -101,5 +101,6 @@ contracts. Qdrant is not a required Compose service for the local MVP.
 - Retrieval is bounded and offline-first.
 - Retrieved content is sanitized together with incident evidence before provider
   analysis.
-- Current knowledge/AI endpoints are lab/local endpoints until authentication,
-  RBAC, rate limiting, and later hardening phases are implemented.
+- Knowledge/AI endpoints require SOC sessions by default. Indexing requires admin
+  permission; retrieval is available to authorized readers. Retrieved documents
+  remain untrusted evidence and cannot change the agent's tool allowlist or policy.

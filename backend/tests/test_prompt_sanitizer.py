@@ -84,3 +84,17 @@ def test_secrets_tokens_and_sensitive_query_params_are_redacted():
     assert "hunter2" not in value
     assert "[REDACTED]" in value
     assert result.metadata.redacted >= 3
+
+
+def test_quoted_json_and_camel_case_secrets_are_redacted():
+    sanitizer = PromptSanitizer()
+
+    result = sanitizer.sanitize(
+        {"log": '''{"api_key":"secret-one","token": "secret-two","clientSecret":"secret-three"}'''}
+    )
+
+    value = result.value["log"]
+    assert "secret-one" not in value
+    assert "secret-two" not in value
+    assert "secret-three" not in value
+    assert value.count("[REDACTED]") == 3

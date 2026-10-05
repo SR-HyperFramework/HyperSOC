@@ -14,18 +14,18 @@ Wazuh manager  -- outbound HTTPS -->  SOC host:8000 (or reverse proxy)
 
 The manager must use a routable host name or IP for the SOC host. It must not
 use the Compose DNS name `backend`, and `localhost` only works when the manager
-and the published backend port run on the same host. TCP port `8000` is the
-local development ingress; production deployments should put the endpoint
-behind a TLS reverse proxy and allow inbound traffic only from the manager's
-address (or a private network/VPN).
+and the published backend port run on the same host. TCP port `8000` is the local development ingress and binds to `127.0.0.1` by
+default. Set `BACKEND_BIND_HOST=0.0.0.0` only when the manager is external to the
+SOC host, then place the endpoint behind a TLS reverse proxy and allow inbound
+traffic only from the manager's address (or a private network/VPN).
 
-The backend's `/health` endpoint checks process liveness. `/ready` checks
-PostgreSQL connectivity; it does not run migrations. Apply migrations before
-enabling the Wazuh integration:
+The backend's `/health` endpoint checks process liveness. `/ready` requires both
+PostgreSQL connectivity and the current Alembic migration head. Compose runs a
+one-shot migration service before starting the backend; the application never
+migrates its database implicitly:
 
 ```bash
 docker compose up -d --build
-docker compose exec backend alembic upgrade head
 curl -fsS http://127.0.0.1:8000/health
 curl -fsS http://127.0.0.1:8000/ready
 ```
@@ -155,11 +155,14 @@ or token is cached.
 
 ### Containment is reported strictly
 
-The action is only marked `SUCCESS` — and the incident only moves to
-`CONTAINED` — when the manager reports zero failed items and affects every
-requested agent. Partial delivery is recorded as `FAILED` with
+The action records delivery `SUCCESS` when the manager reports zero failed items
+and affects every requested agent. This does not move the incident to `CONTAINED`.
+Post-approval endpoint block evidence for every requested agent is required through
+`POST /api/v1/actions/{id}/verify`; see [SOC deployment](soc-deployment.md).
+Partial delivery is recorded as `FAILED` with
 `total_affected_items`, `total_failed_items`, and `failed_error_codes` kept in
-`execution_result`, so a half-applied block is never mistaken for containment.
+`execution_result`. Both simulation and Manager acceptance carry
+`containment_verified=false` until endpoint verification succeeds.
 
 Transport failures, rejected credentials, and malformed responses raise a
 `SIEMResponseError`, which marks the action `FAILED` and returns HTTP `409`.

@@ -1,0 +1,130 @@
+{
+  "dataset": "hypersoc-mixed-pilot-v2",
+  "status": "mixed_pilot_labels_require_independent_review",
+  "cases": [
+    {
+      "id": "C01",
+      "scenario": "Repeated SSH failures followed by a successful login from the same source.",
+      "truth": {"classification": "true_positive", "severity": "high", "mitre_ids": ["T1110", "T1078"]},
+      "alerts": [
+        {"key": "ssh-1", "offset_seconds": 0, "agent": {"id": "101", "name": "pilot-ssh-01"}, "rule": {"id": "5710", "level": 8, "description": "sshd authentication failed", "groups": ["sshd", "authentication_failed"], "mitre": {"id": ["T1110"]}}, "data": {"srcip": "198.51.100.10", "srcuser": "root", "status": "failed"}},
+        {"key": "ssh-2", "offset_seconds": 25, "agent": {"id": "101", "name": "pilot-ssh-01"}, "rule": {"id": "5710", "level": 8, "description": "sshd authentication failed", "groups": ["sshd", "authentication_failed"], "mitre": {"id": ["T1110"]}}, "data": {"srcip": "198.51.100.10", "srcuser": "root", "status": "failed"}},
+        {"key": "ssh-3", "offset_seconds": 55, "agent": {"id": "101", "name": "pilot-ssh-01"}, "rule": {"id": "5715", "level": 10, "description": "sshd successful login after failures", "groups": ["sshd", "authentication_success"], "mitre": {"id": ["T1078"]}}, "data": {"srcip": "198.51.100.10", "srcuser": "root", "status": "success"}}
+      ]
+    },
+    {
+      "id": "C02",
+      "scenario": "Encoded PowerShell on a workstation followed by a suspicious network connection.",
+      "truth": {"classification": "true_positive", "severity": "high", "mitre_ids": ["T1059.001"]},
+      "alerts": [
+        {"key": "ps-1", "offset_seconds": 0, "agent": {"id": "102", "name": "pilot-win-02"}, "rule": {"id": "61603", "level": 12, "description": "PowerShell encoded command", "groups": ["windows", "powershell"], "mitre": {"id": ["T1059.001"]}}, "data": {"srcip": "198.51.100.20", "win": {"eventdata": {"newProcessName": "powershell.exe", "commandLine": "powershell.exe -EncodedCommand SQBFAFgA"}}}},
+        {"key": "ps-2", "offset_seconds": 40, "agent": {"id": "102", "name": "pilot-win-02"}, "rule": {"id": "61604", "level": 10, "description": "PowerShell network activity", "groups": ["windows", "powershell"], "mitre": {"id": ["T1059.001"]}}, "data": {"srcip": "198.51.100.20", "dstip": "203.0.113.20", "win": {"eventdata": {"newProcessName": "powershell.exe", "commandLine": "powershell.exe -nop -w hidden"}}}}
+      ]
+    },
+    {
+      "id": "C03",
+      "scenario": "A registry Run key is written and the referenced executable starts.",
+      "truth": {"classification": "needs_investigation", "severity": "high", "mitre_ids": ["T1547.001"]},
+      "alerts": [
+        {"key": "run-1", "offset_seconds": 0, "agent": {"id": "103", "name": "pilot-win-03"}, "rule": {"id": "750", "level": 9, "description": "Run key modified", "groups": ["windows", "persistence"], "mitre": {"id": ["T1547.001"]}}, "data": {"srcip": "198.51.100.30", "path": "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Run\\Updater"}},
+        {"key": "run-2", "offset_seconds": 35, "agent": {"id": "103", "name": "pilot-win-03"}, "rule": {"id": "61603", "level": 8, "description": "Process started after Run key write", "groups": ["windows", "persistence"], "mitre": {"id": ["T1547.001"]}}, "data": {"srcip": "198.51.100.30", "win": {"eventdata": {"newProcessName": "C:\\Users\\Public\\updater.exe", "commandLine": "updater.exe /background"}}}}
+      ]
+    },
+    {
+      "id": "C04",
+      "scenario": "File-integrity alert with the offline provider's synthetic malicious-hash fixture.",
+      "truth": {"classification": "true_positive", "severity": "critical", "mitre_ids": ["T1204.002"]},
+      "alerts": [
+        {"key": "hash-1", "offset_seconds": 0, "agent": {"id": "104", "name": "pilot-win-04"}, "rule": {"id": "550", "level": 12, "description": "Executable created", "groups": ["syscheck", "malware"], "mitre": {"id": ["T1204.002"]}}, "data": {"srcip": "198.51.100.40"}, "syscheck": {"path": "C:\\Users\\Public\\sample.exe", "sha256_after": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"}},
+        {"key": "hash-2", "offset_seconds": 20, "agent": {"id": "104", "name": "pilot-win-04"}, "rule": {"id": "61603", "level": 13, "description": "Suspicious executable launched", "groups": ["windows", "malware"], "mitre": {"id": ["T1204.002"]}}, "data": {"srcip": "198.51.100.40", "win": {"eventdata": {"newProcessName": "C:\\Users\\Public\\sample.exe", "commandLine": "sample.exe"}}}}
+      ]
+    },
+    {
+      "id": "C05",
+      "scenario": "Approved maintenance account makes routine configuration changes.",
+      "truth": {"classification": "false_positive", "severity": "low", "mitre_ids": []},
+      "alerts": [
+        {"key": "maint-1", "offset_seconds": 0, "agent": {"id": "105", "name": "pilot-linux-05"}, "rule": {"id": "550", "level": 3, "description": "Configuration file modified during approved maintenance", "groups": ["syscheck"]}, "data": {"srcip": "10.10.5.5", "srcuser": "svc_maintenance", "path": "/etc/cron.d/backup"}},
+        {"key": "maint-2", "offset_seconds": 35, "agent": {"id": "105", "name": "pilot-linux-05"}, "rule": {"id": "550", "level": 3, "description": "Backup job updated by approved maintenance", "groups": ["syscheck"]}, "data": {"srcip": "10.10.5.5", "srcuser": "svc_maintenance", "path": "/etc/backup.conf"}}
+      ]
+    },
+    {
+      "id": "C06",
+      "scenario": "Two successful logins from a known internal jump host; no failure or adverse activity.",
+      "truth": {"classification": "false_positive", "severity": "low", "mitre_ids": []},
+      "alerts": [
+        {"key": "login-1", "offset_seconds": 0, "agent": {"id": "106", "name": "pilot-linux-06"}, "rule": {"id": "5715", "level": 3, "description": "Successful SSH login", "groups": ["sshd", "authentication_success"]}, "data": {"srcip": "10.10.6.6", "srcuser": "ops", "status": "success"}},
+        {"key": "login-2", "offset_seconds": 40, "agent": {"id": "106", "name": "pilot-linux-06"}, "rule": {"id": "5715", "level": 3, "description": "Successful SSH login", "groups": ["sshd", "authentication_success"]}, "data": {"srcip": "10.10.6.6", "srcuser": "ops", "status": "success"}}
+      ]
+    },
+    {
+      "id": "C07",
+      "scenario": "External successful logins with no failure history or asset-owner confirmation.",
+      "truth": {"classification": "needs_investigation", "severity": "medium", "mitre_ids": []},
+      "alerts": [
+        {"key": "amb-1", "offset_seconds": 0, "agent": {"id": "107", "name": "pilot-linux-07"}, "rule": {"id": "5715", "level": 6, "description": "SSH login from external address", "groups": ["sshd", "authentication_success"]}, "data": {"srcip": "203.0.113.70", "srcuser": "contractor", "status": "success"}},
+        {"key": "amb-2", "offset_seconds": 45, "agent": {"id": "107", "name": "pilot-linux-07"}, "rule": {"id": "5715", "level": 6, "description": "Repeated SSH login from external address", "groups": ["sshd", "authentication_success"]}, "data": {"srcip": "203.0.113.70", "srcuser": "contractor", "status": "success"}}
+      ]
+    },
+    {
+      "id": "C08",
+      "scenario": "Two low-context decoder events lacking enough detail for a verdict.",
+      "truth": {"classification": "unknown", "severity": "low", "mitre_ids": []},
+      "alerts": [
+        {"key": "unknown-1", "offset_seconds": 0, "agent": {"id": "108", "name": "pilot-edge-08"}, "rule": {"id": "100001", "level": 2, "description": "Unparsed event from edge appliance", "groups": ["decoder_error"]}, "data": {"srcip": "10.10.8.8"}},
+        {"key": "unknown-2", "offset_seconds": 50, "agent": {"id": "108", "name": "pilot-edge-08"}, "rule": {"id": "100001", "level": 2, "description": "Second unparsed event from edge appliance", "groups": ["decoder_error"]}, "data": {"srcip": "10.10.8.8"}}
+      ]
+    },
+    {
+      "id": "C09",
+      "scenario": "Observed SSH invalid-user attempts from one public source over about four minutes; no successful login is shown.",
+      "origin": "public_observed_wazuh_redacted_projection",
+      "source_url": "https://huggingface.co/datasets/kholil-lil/wazuh-alerts",
+      "source_revision": "13cc552c9de42eecee22f6e4c2fe34c80ae3f5d8",
+      "source_sha256": "487bc73ace742995e5e09622494c0b750f513c3a9328dd2276c50444ab0df532",
+      "source_alert_ids": ["1741133026.4897", "1741133026.5413", "1741133238.24904", "1741133238.25446"],
+      "label_basis": "source per-alert True Positive; incident severity and mapping are provisional curator labels",
+      "redactions": ["public source IP replaced by TEST-NET address", "agent and attempted usernames pseudonymized", "original event timestamps shifted at packet preparation"],
+      "truth": {"classification": "true_positive", "severity": "medium", "mitre_ids": ["T1110.001", "T1021.004"]},
+      "alerts": [
+        {"key": "observed-ssh-1", "offset_seconds": 0, "agent": {"id": "209", "name": "observed-ssh-host", "ip": "192.0.2.109"}, "rule": {"id": "5710", "level": 5, "description": "sshd: Attempt to login using a non-existent user", "groups": ["syslog", "sshd", "authentication_failed", "invalid_login"], "mitre": {"id": ["T1110.001", "T1021.004"]}}, "decoder": {"name": "sshd"}, "data": {"srcip": "198.51.100.91", "srcport": "47838", "srcuser": "candidate-a"}, "full_log": "Mar 05 00:03:44 observed-ssh-host sshd[3129036]: Invalid user candidate-a from 198.51.100.91 port 47838", "location": "journald"},
+        {"key": "observed-ssh-2", "offset_seconds": 0, "agent": {"id": "209", "name": "observed-ssh-host", "ip": "192.0.2.109"}, "rule": {"id": "5710", "level": 5, "description": "sshd: Attempt to login using a non-existent user", "groups": ["syslog", "sshd", "authentication_failed", "invalid_login"], "mitre": {"id": ["T1110.001", "T1021.004"]}}, "decoder": {"name": "sshd"}, "data": {"srcip": "198.51.100.91", "srcport": "47838", "srcuser": "candidate-a"}, "full_log": "Mar 05 00:03:45 observed-ssh-host sshd[3129036]: Disconnected from invalid user candidate-a 198.51.100.91 port 47838 [preauth]", "location": "journald"},
+        {"key": "observed-ssh-3", "offset_seconds": 212, "agent": {"id": "209", "name": "observed-ssh-host", "ip": "192.0.2.109"}, "rule": {"id": "5710", "level": 5, "description": "sshd: Attempt to login using a non-existent user", "groups": ["syslog", "sshd", "authentication_failed", "invalid_login"], "mitre": {"id": ["T1110.001", "T1021.004"]}}, "decoder": {"name": "sshd"}, "data": {"srcip": "198.51.100.91", "srcport": "36574", "srcuser": "candidate-b"}, "full_log": "Mar 05 00:07:16 observed-ssh-host sshd[3129149]: Disconnected from invalid user candidate-b 198.51.100.91 port 36574 [preauth]", "location": "journald"},
+        {"key": "observed-ssh-4", "offset_seconds": 212, "agent": {"id": "209", "name": "observed-ssh-host", "ip": "192.0.2.109"}, "rule": {"id": "5710", "level": 5, "description": "sshd: Attempt to login using a non-existent user", "groups": ["syslog", "sshd", "authentication_failed", "invalid_login"], "mitre": {"id": ["T1110.001", "T1021.004"]}}, "decoder": {"name": "sshd"}, "data": {"srcip": "198.51.100.91", "srcport": "36574", "srcuser": "candidate-b"}, "full_log": "Mar 05 00:07:16 observed-ssh-host sshd[3129149]: Invalid user candidate-b from 198.51.100.91 port 36574", "location": "journald"}
+      ]
+    },
+    {
+      "id": "C10",
+      "scenario": "Two observed HTTP 400/404 requests from the same public client; evidence alone is insufficient to confirm compromise.",
+      "origin": "public_observed_wazuh_redacted_projection",
+      "source_url": "https://huggingface.co/datasets/kholil-lil/wazuh-alerts",
+      "source_revision": "13cc552c9de42eecee22f6e4c2fe34c80ae3f5d8",
+      "source_sha256": "487bc73ace742995e5e09622494c0b750f513c3a9328dd2276c50444ab0df532",
+      "source_alert_ids": ["1741133030.18922", "1741133030.19377"],
+      "label_basis": "source per-alert True Positive, but incident-level needs_investigation is provisional curator judgment",
+      "redactions": ["public source IP replaced by TEST-NET address", "agent identity pseudonymized", "original event timestamps shifted at packet preparation"],
+      "truth": {"classification": "needs_investigation", "severity": "medium", "mitre_ids": []},
+      "alerts": [
+        {"key": "observed-web-1", "offset_seconds": 0, "agent": {"id": "210", "name": "observed-web-host", "ip": "192.0.2.110"}, "rule": {"id": "31101", "level": 5, "description": "Web server 400 error code.", "groups": ["web", "accesslog", "attack"]}, "decoder": {"name": "web-accesslog"}, "data": {"protocol": "GET", "srcip": "203.0.113.92", "id": "400", "url": "/Kb8w"}, "full_log": "203.0.113.92 - - [05/Mar/2025:00:03:49 +0000] \"GET /Kb8w HTTP/1.1\" 400 264 \"-\" \"Go-http-client/1.1\"", "location": "/var/log/nginx/apidev-access.log"},
+        {"key": "observed-web-2", "offset_seconds": 0, "agent": {"id": "210", "name": "observed-web-host", "ip": "192.0.2.110"}, "rule": {"id": "31101", "level": 5, "description": "Web server 400 error code.", "groups": ["web", "accesslog", "attack"]}, "decoder": {"name": "web-accesslog"}, "data": {"protocol": "GET", "srcip": "203.0.113.92", "id": "404", "url": "/BHem"}, "full_log": "203.0.113.92 - - [05/Mar/2025:00:03:50 +0000] \"GET /BHem HTTP/1.1\" 404 143 \"-\" \"Go-http-client/1.1\"", "location": "/var/log/nginx/apidev-access.log"}
+      ]
+    },
+    {
+      "id": "C11",
+      "scenario": "Three observed routine log-rotation notices with no network source field.",
+      "origin": "public_observed_wazuh_redacted_projection",
+      "source_url": "https://huggingface.co/datasets/kholil-lil/wazuh-alerts",
+      "source_revision": "13cc552c9de42eecee22f6e4c2fe34c80ae3f5d8",
+      "source_sha256": "487bc73ace742995e5e09622494c0b750f513c3a9328dd2276c50444ab0df532",
+      "source_alert_ids": ["1741132834.0", "1741132834.383", "1741132834.761"],
+      "label_basis": "source per-alert False Positive; incident-level false_positive is provisional curator label",
+      "redactions": ["agent identity pseudonymized", "original event timestamps shifted at packet preparation"],
+      "truth": {"classification": "false_positive", "severity": "low", "mitre_ids": []},
+      "alerts": [
+        {"key": "observed-rotate-1", "offset_seconds": 0, "agent": {"id": "211", "name": "observed-log-host", "ip": "192.0.2.111"}, "rule": {"id": "591", "level": 3, "description": "Log file rotated.", "groups": ["ossec"]}, "decoder": {"name": "ossec"}, "full_log": "ossec: File rotated (inode changed): '/var/log/nginx/apidev-access.log'.", "location": "logcollector"},
+        {"key": "observed-rotate-2", "offset_seconds": 0, "agent": {"id": "211", "name": "observed-log-host", "ip": "192.0.2.111"}, "rule": {"id": "591", "level": 3, "description": "Log file rotated.", "groups": ["ossec"]}, "decoder": {"name": "ossec"}, "full_log": "ossec: File rotated (inode changed): '/var/log/nginx/access.log'.", "location": "logcollector"},
+        {"key": "observed-rotate-3", "offset_seconds": 0, "agent": {"id": "211", "name": "observed-log-host", "ip": "192.0.2.111"}, "rule": {"id": "591", "level": 3, "description": "Log file rotated.", "groups": ["ossec"]}, "decoder": {"name": "ossec"}, "full_log": "ossec: File rotated (inode changed): '/var/log/nginx/apidev-error.log'.", "location": "logcollector"}
+      ]
+    }
+  ]
+}

@@ -6,7 +6,12 @@ from dataclasses import dataclass
 from typing import Any
 
 _SECRET_ASSIGNMENT = re.compile(
-    r"(?i)\b(password|passwd|pwd|token|api[_-]?key|secret|client_secret)\b\s*[:=]\s*([^\s&;,'\"]+)"
+    r'''(?ix)
+    (?P<prefix>["']?\b(?:password|passwd|pwd|token|api[_-]?key|apiKey|secret|client[_-]?secret|clientSecret)\b["']?\s*[:=]\s*)
+    (?P<quote>["']?)
+    (?P<value>[^\s&;,"']+)
+    (?P=quote)
+    '''
 )
 _BEARER_TOKEN = re.compile(r"(?i)\bbearer\s+[a-z0-9._\-~+/]+=*")
 _SECRET_QUERY_PARAM = re.compile(r"(?i)([?&](?:token|api[_-]?key|password|secret)=)[^&#\s]+")
@@ -121,7 +126,7 @@ class PromptSanitizer:
             metadata.huge_blobs_stripped += 1
             return self._apply_context_budget(_HUGE_BLOB_PLACEHOLDER, metadata)
 
-        text, count = _SECRET_ASSIGNMENT.subn(lambda match: f"{match.group(1)}=[REDACTED]", text)
+        text, count = _SECRET_ASSIGNMENT.subn(lambda match: f"{match.group('prefix')}[REDACTED]", text)
         metadata.redacted += count
         text, count = _BEARER_TOKEN.subn("Bearer [REDACTED]", text)
         metadata.redacted += count

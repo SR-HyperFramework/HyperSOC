@@ -1,5 +1,7 @@
 import hashlib
-from uuid import UUID
+import json
+from datetime import datetime, timezone
+from uuid import UUID, uuid4
 
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
@@ -29,6 +31,9 @@ def compute_fingerprint(alert: AlertIngest) -> str:
             alert.event.file_hash or "",
         ]
     )
+    source_id = alert.raw.get("id")
+    if isinstance(source_id, str) and source_id:
+        important = json.dumps([important, source_id], separators=(",", ":"), ensure_ascii=False)
     return hashlib.sha256(important.encode()).hexdigest()
 
 
@@ -43,6 +48,8 @@ def normalize_ingested_alert(alert: AlertIngest, *, alert_id: UUID | None = None
 
 def normalize_persisted_alert(alert: Alert) -> NormalizedAlert:
     """Convert a stored alert row to the Phase 4 contract for downstream services."""
+    if isinstance(alert.raw_event, dict) and "_canonical" in alert.raw_event:
+        return NormalizedAlert.model_validate(alert.raw_event["_canonical"])
     try:
         if isinstance(alert.raw_event, dict) and alert.raw_event:
             return normalize_wazuh_alert(alert.raw_event, alert_id=alert.id)
@@ -84,6 +91,7 @@ async def ingest_alert(db: AsyncSession, alert: AlertIngest) -> tuple[Alert, boo
         return existing, False
 
     row = Alert(
+        id=uuid4(),
         external_id=alert.raw.get("id") if isinstance(alert.raw, dict) else None,
         source=alert.source,
         timestamp=alert.timestamp,
@@ -108,6 +116,13 @@ async def ingest_alert(db: AsyncSession, alert: AlertIngest) -> tuple[Alert, boo
         status="received",
     )
     db.add(row)
+    from app.core.config import settings
+    if settings.automation_enabled:
+        from app.models.workflow import WorkflowJob
+        db.add(WorkflowJob(
+            id=uuid4(), alert_id=row.id, status="PENDING", stage="understanding",
+            attempts=0, available_at=datetime.now(timezone.utc), output={},
+        ))
     try:
         await db.commit()
     except IntegrityError:

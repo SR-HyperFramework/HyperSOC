@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HyperSOC investigator</title>
+  <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
+  <link rel="stylesheet" href="/assets/soc.css">
+  <script src="/assets/soc.js" defer></script>
+</head>
+<body>
+  <a class="skip" href="#workspace">Skip to investigation</a>
+  <header class="app-header"><a href="/" class="brand">HyperSOC</a><nav aria-label="Workspace">
+    <button data-view="incidents" aria-pressed="true">Incidents</button><button data-view="hub" aria-pressed="false">Intelligence hub</button><button data-view="workflows" aria-pressed="false">Automation</button>
+  </nav><div class="account"><span id="account"></span><button id="logout" hidden>Sign out</button></div></header>
+  <p id="notice" role="status" aria-live="polite"></p>
+  <section id="login-panel" class="login" hidden><h1>Sign in to your SOC workspace</h1><p>Review detections with internal context and source evidence.</p>
+    <form id="login-form"><label>Username<input id="username" autocomplete="username" required maxlength="128"></label><label>Password<input id="password" type="password" autocomplete="current-password" required maxlength="1024"></label><button class="primary" type="submit">Sign in</button></form>
+  </section>
+  <main id="workspace" hidden>
+    <div class="overview"><div id="summary" aria-label="Live SOC counts"></div><button id="refresh">Refresh data</button></div>
+    <section id="incidents-view" class="case-layout">
+      <aside class="queue"><h2>Incident queue</h2><label>Filter status<select id="status-filter"><option value="">All statuses</option><option>NEW</option><option>TRIAGED</option><option>INVESTIGATING</option><option>FALSE_POSITIVE</option><option>CONTAINED</option><option>RESOLVED</option></select></label><div id="incident-list"></div></aside>
+      <article id="case" class="case"><div class="empty"><h1>Incident investigator</h1><p>Select an incident to review its findings, evidence and response.</p></div></article>
+    </section>
+    <section id="hub-view" hidden><div class="section-heading"><div><h1>Cyber Intelligence Hub</h1><p>Assets, identities and relationships observed across your connected sources.</p></div></div>
+      <div class="hub-layout"><section class="surface"><h2>Entities</h2><label>Entity type<select id="entity-kind"><option value="">All types</option><option value="asset">Assets</option><option value="identity">Identities</option><option value="process">Processes</option><option value="ip">IP addresses</option><option value="technique">MITRE techniques</option></select></label><div id="entity-list"></div></section><section class="surface"><h2>Relationship explorer</h2><div id="entity-graph"><p class="muted">Select an entity to explore its recorded relationships.</p></div></section></div>
+    </section>
+    <section id="workflows-view" hidden><h1>Alert automation</h1><p class="muted">Each alert keeps its processing checkpoints. Analyst decisions and response approval remain explicit actions.</p><div id="workflow-list"></div></section>
+  </main>
+</body>
+</html>

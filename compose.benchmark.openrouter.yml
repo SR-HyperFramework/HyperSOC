@@ -1,0 +1,9 @@
+# Opt-in Jev benchmark override. Compose reads OPENROUTER_API_KEY from the shell
+# or a private .env; never put a real key in this file.
+services:
+  backend:
+    environment:
+      AI_TRIAGE_PROVIDER_MODE: jev
+      TYPESAFE_API_KEY: ${OPENROUTER_API_KEY:?Set OPENROUTER_API_KEY before running the Jev benchmark}
+      TYPESAFE_BASE_URL: https://openrouter.ai/api
+      TYPESAFE_MODEL: jev-1.13

@@ -1,0 +1,60 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      full_workload:
+        description: Run the network-dependent 738-alert workload
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run backend and benchmark tests
+        run: make test
+
+  benchmark-smoke:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - name: Run disposable offline pilot
+        run: make benchmark-smoke
+      - name: Upload sanitized pilot result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-pilot
+          path: .benchmark-runs/*.json
+          if-no-files-found: ignore
+      - name: Remove disposable resources
+        if: always()
+        run: make benchmark-clean
+
+  full-workload:
+    if: github.event_name == 'workflow_dispatch' && inputs.full_workload
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Verify pinned public source
+        run: make benchmark-verify
+      - name: Run disposable 738-alert workload
+        run: make benchmark-workload
+      - name: Upload sanitized workload result
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: benchmark-workload
+          path: .benchmark-runs/*.json
+          if-no-files-found: ignore
+      - name: Remove disposable resources
+        if: always()
+        run: make benchmark-clean

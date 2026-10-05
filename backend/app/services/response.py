@@ -11,6 +11,10 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.incident import Incident
+from app.models.investigation import Investigation
+from app.models.hub import HubEvidence
+from app.core.auth import audit
+from app.core.config import settings
 from app.models.response_action import ResponseAction
 from app.schemas.response_action import (
     ResponseActionApprovalRequest,
@@ -93,7 +97,7 @@ class ResponseActionPolicy:
             reasons.append("Target is protected by the SOC infrastructure allowlist")
         if normalized in self.denylist:
             reasons.append("Target appears in the response denylist")
-        if any(address in network for network in _PROTECTED_IP_NETWORKS):
+        if address.is_unspecified or any(address in network for network in _PROTECTED_IP_NETWORKS):
             reasons.append("Target is localhost, unspecified, link-local, or multicast and cannot be blocked")
         if not self.allow_private_targets and any(address in network for network in _MANAGEMENT_PRIVATE_NETWORKS):
             reasons.append("Target is in a private management subnet and requires a later hardening policy exception")
@@ -140,6 +144,8 @@ class ResponseActionService:
             execution_result=None,
         )
         db.add(row)
+        if getattr(db, "info", {}).get("soc_principal"):
+            audit(db, "response.request", str(row.id), details={"incident_id": str(row.incident_id), "type": row.type, "target": row.target})
         await self._commit(db)
         await self._refresh(db, row)
         return self._out(row)
@@ -154,11 +160,16 @@ class ResponseActionService:
         return [self._out(row) for row in result.all()]
 
     async def approve(self, db: AsyncSession, action_id: UUID, request: ResponseActionApprovalRequest) -> ResponseActionOut | None:
-        row = await db.get(ResponseAction, action_id)
+        row = await db.get(ResponseAction, action_id, with_for_update=True)
         if row is None:
             return None
         if row.status != "PENDING":
             raise ResponseActionConflict("Only PENDING response actions can be approved")
+        if settings.auth_enabled:
+            await db.get(Incident, row.incident_id, with_for_update=True)
+            latest = await db.scalar(select(Investigation).where(Investigation.incident_id == row.incident_id).order_by(Investigation.created_at.desc(), Investigation.id.desc()).limit(1))
+            if latest is None or latest.final_classification != "true_positive" or latest.status == "PENDING_REVIEW":
+                raise ResponseActionConflict("The latest investigation must have an analyst-confirmed true-positive conclusion")
         policy_result = self.policy.validate(
             ResponseActionCreate(
                 type=row.type,
@@ -177,12 +188,14 @@ class ResponseActionService:
         row.approved_by = request.approved_by
         row.approved_at = self._clock()
         row.policy_result = policy_result.model_dump(mode="json")
+        if getattr(db, "info", {}).get("soc_principal"):
+            audit(db, "response.approve", str(row.id), details={"target": row.target, "incident_id": str(row.incident_id)})
         await self._commit(db)
         await self._refresh(db, row)
         return self._out(row)
 
     async def reject(self, db: AsyncSession, action_id: UUID, request: ResponseActionRejectRequest) -> ResponseActionOut | None:
-        row = await db.get(ResponseAction, action_id)
+        row = await db.get(ResponseAction, action_id, with_for_update=True)
         if row is None:
             return None
         if row.status != "PENDING":
@@ -191,33 +204,97 @@ class ResponseActionService:
         row.rejected_by = request.rejected_by
         row.rejected_at = self._clock()
         row.rejection_reason = request.reason
+        if getattr(db, "info", {}).get("soc_principal"):
+            audit(db, "response.reject", str(row.id), details={"reason": request.reason})
         await self._commit(db)
         await self._refresh(db, row)
         return self._out(row)
 
     async def execute(self, db: AsyncSession, action_id: UUID) -> ResponseActionOut | None:
-        row = await db.get(ResponseAction, action_id)
+        row = await db.get(ResponseAction, action_id, with_for_update=True)
         if row is None:
             return None
         if row.status != "APPROVED":
             raise ResponseActionConflict("Only APPROVED response actions can be executed")
+        if settings.auth_enabled:
+            await db.get(Incident, row.incident_id, with_for_update=True)
+            latest = await db.scalar(select(Investigation).where(Investigation.incident_id == row.incident_id).order_by(Investigation.created_at.desc(), Investigation.id.desc()).limit(1))
+            if latest is None or latest.final_classification != "true_positive" or latest.status == "PENDING_REVIEW":
+                raise ResponseActionConflict("The latest investigation must still have an analyst-confirmed true-positive conclusion")
+        validated = self.policy.validate(ResponseActionCreate(type=row.type, target=row.target, reason=row.reason, risk=row.risk, requested_by=row.requested_by, duration_minutes=row.duration_minutes))
+        if not validated.allowed:
+            raise ResponseActionConflict("; ".join(validated.reasons))
         row.status = "EXECUTING"
+        row.execution_result = {"status": "EXECUTING", "metadata": {
+            "execution_mode": self.siem_provider.provider_mode,
+            "agents_requested": list(getattr(self.siem_provider, "agents", [])),
+            "containment_verified": False,
+        }}
+        if getattr(db, "info", {}).get("soc_principal"):
+            audit(db, "response.execute", str(row.id), details={"target": row.target, "provider": self.siem_provider.provider_mode})
         await self._commit(db)
         await self._refresh(db, row)
         try:
             result = await self.siem_provider.execute_response(row)
         except SIEMResponseError as exc:
             row.status = "FAILED"
-            row.execution_result = {"status": "FAILED", "error": str(exc), "provider": getattr(self.siem_provider, "provider_mode", "unknown")}
+            row.execution_result = {**row.execution_result, "status": "FAILED", "error": str(exc), "provider": getattr(self.siem_provider, "provider_mode", "unknown")}
+            if getattr(db, "info", {}).get("soc_principal"):
+                audit(db, "response.result", str(row.id), details={"status": "FAILED", "error_type": type(exc).__name__})
             await self._commit(db)
             await self._refresh(db, row)
             raise ResponseActionConflict(str(exc)) from exc
         row.status = result.status
         row.execution_result = result.as_dict()
-        if result.status == "SUCCESS":
-            incident = await db.get(Incident, row.incident_id)
-            if incident is not None:
-                incident.status = "CONTAINED"
+        # Manager delivery and offline simulation do not establish endpoint containment.
+        if getattr(db, "info", {}).get("soc_principal"):
+            audit(db, "response.result", str(row.id), details={"status": result.status, "execution_mode": result.metadata.get("execution_mode")})
+        await self._commit(db)
+        await self._refresh(db, row)
+        return self._out(row)
+
+    async def verify(self, db: AsyncSession, action_id: UUID, evidence_id: UUID | list[UUID], notes: str) -> ResponseActionOut | None:
+        row = await db.get(ResponseAction, action_id, with_for_update=True)
+        if row is None:
+            return None
+        result = row.execution_result or {}
+        mode = result.get("metadata", {}).get("execution_mode", self.siem_provider.provider_mode)
+        if mode != "wazuh" or row.status not in {"SUCCESS", "EXECUTING", "FAILED"}:
+            raise ResponseActionConflict("Only a dispatched real Wazuh action can be verified")
+        identifiers = list(dict.fromkeys(evidence_id if isinstance(evidence_id, list) else [evidence_id]))
+        if not identifiers or len(identifiers) > 50:
+            raise ResponseActionConflict("Provide one or more response evidence IDs")
+        requested_agents = set(result.get("metadata", {}).get("agents_requested", []))
+        if not requested_agents:
+            raise ResponseActionConflict("The stored execution must identify its requested agent scope")
+        confirmed_agents = set()
+        trusted_sources = {value.strip() for value in settings.response_evidence_sources.split(",") if value.strip()}
+        approved = row.approved_at.replace(tzinfo=timezone.utc) if row.approved_at and row.approved_at.tzinfo is None else row.approved_at
+        for identifier in identifiers:
+            evidence = await db.get(HubEvidence, identifier)
+            attributes = evidence.attributes if evidence else {}
+            if evidence is None or evidence.source not in trusted_sources:
+                raise ResponseActionConflict("Verification needs evidence from a trusted response telemetry source")
+            if attributes.get("response_action_id") != str(row.id) or attributes.get("response_effect") != "blocked" or attributes.get("target") != row.target:
+                raise ResponseActionConflict("Response evidence must identify this action, blocked effect, and target")
+            observed = evidence.timestamp.replace(tzinfo=timezone.utc) if evidence.timestamp.tzinfo is None else evidence.timestamp
+            if approved is None or observed < approved or observed > self._clock():
+                raise ResponseActionConflict("Response evidence must be observed after approval and no later than now")
+            agent = evidence.normalized.get("host", {}).get("id")
+            if agent:
+                confirmed_agents.add(str(agent))
+        if not requested_agents <= confirmed_agents:
+            raise ResponseActionConflict("Endpoint block evidence is required for every requested agent")
+        incident = await db.get(Incident, row.incident_id, with_for_update=True)
+        if incident.status == "FALSE_POSITIVE":
+            raise ResponseActionConflict("False-positive incidents cannot be marked contained")
+        principal = getattr(db, "info", {}).get("soc_principal")
+        metadata = {**result.get("metadata", {}), "execution_mode": "wazuh", "containment_verified": True,
+            "verification": {"evidence_id": str(identifiers[0]), "evidence_ids": [str(value) for value in identifiers], "agents_verified": sorted(confirmed_agents), "verified_by": principal.username if principal else "lab-analyst", "verified_at": self._clock().isoformat(), "notes": notes}}
+        row.execution_result = {**result, "status": "SUCCESS", "metadata": metadata}
+        row.status = "SUCCESS"
+        incident.status = "CONTAINED"
+        audit(db, "response.verify", str(row.id), details={"evidence_ids": [str(value) for value in identifiers], "target": row.target})
         await self._commit(db)
         await self._refresh(db, row)
         return self._out(row)

@@ -37,7 +37,7 @@ class _MemoryDb:
         self.commits = 0
         self.refreshed = []
 
-    async def get(self, model, item_id):
+    async def get(self, model, item_id, **_kwargs):
         if model is Incident and self.incident and item_id == self.incident.id:
             return self.incident
         if model is ResponseAction:
@@ -228,7 +228,9 @@ def test_execute_requires_approved_action_and_records_offline_wazuh_result():
         assert executed.status == "SUCCESS"
         assert executed.execution_result["provider"] == "wazuh-active-response-offline"
         assert executed.execution_result["metadata"]["command"] == "firewall-drop"
-        assert incident.status == "CONTAINED"
+        assert incident.status == "NEW"
+        assert executed.execution_result["metadata"]["execution_mode"] == "offline"
+        assert executed.execution_result["metadata"]["containment_verified"] is False
 
     import asyncio
 

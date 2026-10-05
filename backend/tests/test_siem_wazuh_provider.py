@@ -72,7 +72,8 @@ def test_block_ip_authenticates_then_sends_command_to_named_agents():
     api = _WazuhAPI(ar_payload=_ar_payload(affected=("001", "002")))
     provider = _provider(api, agents="001,002")
 
-    result = asyncio.run(provider.execute_response(_action(status="APPROVED")))
+    action = _action(status="APPROVED")
+    result = asyncio.run(provider.execute_response(action))
 
     assert result.status == "SUCCESS"
     assert result.provider == "wazuh-active-response"
@@ -89,6 +90,8 @@ def test_block_ip_authenticates_then_sends_command_to_named_agents():
     body = json.loads(ar_request.read())
     assert body["command"] == "firewall-drop"
     assert body["alert"]["data"]["srcip"] == "8.8.8.8"
+    assert body["alert"]["data"]["hypersoc_response"] == {"action_id": str(action.id), "target": action.target}
+    assert "effect" not in body["alert"]["data"]["hypersoc_response"]
 
 
 def test_tls_verification_and_timeout_reach_the_http_client():
@@ -116,7 +119,7 @@ def test_partial_or_rejected_delivery_is_reported_as_failed(ar_payload, agents):
     result = asyncio.run(provider.execute_response(_action(status="APPROVED")))
 
     assert result.status == "FAILED"
-    assert "did not apply" in result.message
+    assert "did not accept" in result.message
 
 
 def test_failed_agent_error_codes_are_recorded_for_triage():
@@ -151,7 +154,7 @@ def test_partial_delivery_does_not_mark_the_incident_contained():
     asyncio.run(scenario())
 
 
-def test_full_delivery_marks_the_incident_contained():
+def test_full_delivery_requires_endpoint_verification_before_containment():
     async def scenario():
         incident = _incident()
         action = _action(status="APPROVED")
@@ -162,7 +165,8 @@ def test_full_delivery_marks_the_incident_contained():
 
         assert executed is not None
         assert executed.status == "SUCCESS"
-        assert incident.status == "CONTAINED"
+        assert incident.status == "NEW"
+        assert executed.execution_result["metadata"]["containment_verified"] is False
 
     asyncio.run(scenario())
 

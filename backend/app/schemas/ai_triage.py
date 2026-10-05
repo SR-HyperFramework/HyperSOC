@@ -7,8 +7,8 @@ from pydantic import BaseModel, Field
 from app.schemas.incident import IncidentDetailOut, IncidentSeverity, IncidentStatus
 from app.schemas.threat_intel import IndicatorType, Verdict
 
-AI_TRIAGE_CONTEXT_VERSION = "ai_triage_context.v1"
-AI_TRIAGE_PROMPT_VERSION = "ai_triage_prompt.v1"
+AI_TRIAGE_CONTEXT_VERSION = "ai_triage_context.v2"
+AI_TRIAGE_PROMPT_VERSION = "ai_triage_prompt.v2"
 AI_TRIAGE_RESULT_VERSION = "ai_triage_result.v1"
 UNTRUSTED_EVENT_DATA_START = "<UNTRUSTED_EVENT_DATA>"
 UNTRUSTED_EVENT_DATA_END = "</UNTRUSTED_EVENT_DATA>"
@@ -87,13 +87,34 @@ class AITriagePlaybookContext(_StrictAITriageSchema):
     summary: str = Field(max_length=1000)
 
 
+class AITriageDecisionAssessment(_StrictAITriageSchema):
+    incident_alert_count: int = Field(ge=0)
+    evidence_alert_count: int = Field(ge=0)
+    omitted_alert_count: int = Field(ge=0)
+    evidence_truncated: bool = False
+    event_families: dict[str, int] = Field(default_factory=dict)
+    event_kinds: dict[str, int] = Field(default_factory=dict)
+    detection_groups: dict[str, int] = Field(default_factory=dict)
+    authentication_outcomes: dict[str, int] = Field(default_factory=dict)
+    maximum_rule_level: int = Field(default=0, ge=0, le=100)
+    mitre_ids: list[str] = Field(default_factory=list, max_length=50)
+    active_response_alerts: int = Field(default=0, ge=0)
+    suspicious_or_malicious_iocs: int = Field(default=0, ge=0)
+    benign_iocs: int = Field(default=0, ge=0)
+    test_net_or_non_global_ip_context: bool = False
+    has_trusted_benign_explanation: bool = False
+    caveats: list[str] = Field(default_factory=list, max_length=20)
+
+
 class AITriageContext(_StrictAITriageSchema):
-    schema_version: Literal["ai_triage_context.v1"] = AI_TRIAGE_CONTEXT_VERSION
+    schema_version: Literal["ai_triage_context.v2"] = AI_TRIAGE_CONTEXT_VERSION
     incident: AITriageIncidentContext
+    assessment: AITriageDecisionAssessment
     alerts: list[AITriageAlertEvidence] = Field(default_factory=list)
     enrichment: list[AITriageEnrichmentEvidence] = Field(default_factory=list)
     mitre_context: list[AITriageMitreContext] = Field(default_factory=list)
     playbook_context: list[AITriagePlaybookContext] = Field(default_factory=list)
+    internal_context: dict[str, Any] = Field(default_factory=dict)
 
 
 class AITriageSanitizerMetadata(_StrictAITriageSchema):
@@ -108,7 +129,7 @@ class AITriageSanitizerMetadata(_StrictAITriageSchema):
 
 
 class AITriagePromptEnvelope(_StrictAITriageSchema):
-    schema_version: Literal["ai_triage_prompt.v1"] = AI_TRIAGE_PROMPT_VERSION
+    schema_version: Literal["ai_triage_prompt.v2"] = AI_TRIAGE_PROMPT_VERSION
     system_instruction: str = Field(max_length=4000)
     untrusted_data_start: Literal["<UNTRUSTED_EVENT_DATA>"] = UNTRUSTED_EVENT_DATA_START
     incident_context: AITriageContext

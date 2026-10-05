@@ -124,13 +124,14 @@ Example correlation response:
 
 - Default correlation reads existing enrichment only. It does not refresh provider
   lookups unless `refresh_threat_intel=true` is requested.
-- The current APIs are lab/local endpoints until later authentication, RBAC, and
-  rate limiting phases are implemented.
+- The APIs require SOC sessions and role authorization by default. The durable
+  worker runs correlation automatically; manual invocation remains available.
 - Phase 7 AI triage consumes correlated incidents produced by this service; it
-  does not change correlation behavior or run from the signed ingest endpoint.
+  is also invoked by the durable SOC worker after signed ingest commits a job.
 - Phase 8 prompt-injection protection sanitizes AI-bound incident evidence after
   normalization/correlation and before provider analysis.
 - Incident AI fields are intentionally empty in Phase 6 and populated only by the
-  later triage path.
+  triage path. Closed-case evidence is excluded from new correlations, so a later
+  detection gets a fresh review and can retrieve the earlier analyst decision.
 - Raw log content remains untrusted evidence and must not be passed directly to an
   LLM in later phases.

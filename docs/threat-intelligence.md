@@ -187,13 +187,12 @@ aggregate `verdict`.
 
 ## Operational notes
 
-- The signed Wazuh ingest endpoint is unchanged; enrichment is not triggered from
-  `POST /api/v1/alerts` in this phase.
+- Signed ingestion queues a durable job; the worker enriches IOCs after gathering
+  internal context. The ingest request returns before that processing completes.
 - Existing alert reads remain backward-compatible.
 - Provider results are sanitized summaries, not full raw provider responses.
-- The read/enrichment endpoints are lab/local endpoints until authentication,
-  RBAC, and rate limiting are added in later phases.
-- Redis remains reserved for a future worker/queue design and is not required for
-  Phase 5.
+- Read/enrichment endpoints require SOC sessions and role authorization by
+  default. The local rate limit is per client address and backend process.
+- Redis remains reserved; the SOC worker uses PostgreSQL jobs and leases.
 - Phase 6 rule-based correlation consumes sanitized enrichment associations when
   scoring malware/hash chains; see [`correlation.md`](correlation.md).

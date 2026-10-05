@@ -265,7 +265,7 @@ def test_external_threat_intel_requires_a_configured_provider():
     values = settings.model_dump()
     values.update(
         {
-            "app_secret_key": "test-secret",
+            "app_secret_key": "test-secret-value",
             "threat_intel_provider_mode": "external",
             "threat_intel_enable_external_providers": True,
             "virustotal_api_key": "",

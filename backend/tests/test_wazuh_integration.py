@@ -11,6 +11,21 @@ custom_ai_soc = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(custom_ai_soc)
 
 
+def test_native_hook_preserves_native_event_while_legacy_hook_keeps_envelope(tmp_path, monkeypatch):
+    import json
+    alert = {"id": "native-event-1", "timestamp": "2026-10-05T12:00:00Z", "agent": {"id": "000", "name": "manager"}, "rule": {"id": "110901", "level": 5}}
+    path = tmp_path / 'alert.json'
+    path.write_text(json.dumps(alert))
+    deliveries = []
+    monkeypatch.setattr(custom_ai_soc, 'send', lambda url, key, payload: deliveries.append(payload))
+    monkeypatch.setattr(custom_ai_soc.sys, 'argv', ['custom-ai-soc', str(path), 'test-secret', 'http://backend:8000/api/v1/hub/native-events'])
+    assert custom_ai_soc.main() == 0
+    assert deliveries[-1] == {"format": "wazuh", "source": "wazuh", "event": alert}
+    monkeypatch.setattr(custom_ai_soc.sys, 'argv', ['custom-ai-soc', str(path), 'test-secret', 'http://backend:8000/api/v1/alerts'])
+    assert custom_ai_soc.main() == 0
+    assert deliveries[-1]['raw'] == alert and deliveries[-1]['source'] == 'wazuh'
+
+
 def test_normalize_sysmon_alert():
     alert = {
         "id": "1700000000.1",

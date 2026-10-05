@@ -55,8 +55,13 @@ class _MemoryDb:
             return self.indicators.get(item_id)
         return None
 
+    async def scalar(self, _statement):
+        return None
+
     async def scalars(self, statement):
         text = str(statement)
+        if "hub_evidence" in text:
+            return _ScalarResult([])
         if "incident_alerts" in text:
             return _ScalarResult(self.links)
         if "alert_threat_intel" in text:
@@ -285,9 +290,79 @@ def test_jev_provider_maps_parallel_typed_decisions_to_triage_result():
         assert request["questions"]["classification"]["type"] == "choice"
         assert request["questions"]["severity"]["type"] == "choice"
         assert request["questions"]["false_positive_probability"]["type"] == "noul"
+        classification = request["questions"]["classification"]
+        assert "absent" in classification["criteria"]["false_positive"].casefold()
+        assert "mutually exclusive" in classification["instructions"].casefold()
+        severity = request["questions"]["severity"]
+        assert "alert count alone" in severity["instructions"].casefold()
+        noul = request["questions"]["false_positive_probability"]
+        assert set(noul["criteria"]) == {"true", "false"}
+        assert "affirmative trusted benign" in noul["criteria"]["true"].casefold()
+        assert "no affirmative trusted benign" in noul["criteria"]["false"].casefold()
         state_json = json.dumps(request["state"])
         assert "raw_event" not in state_json
         assert "raw_provider_payload" not in state_json
+        assessment = request["state"]["incident_context"]["assessment"]
+        assert assessment["incident_alert_count"] == 1
+        assert assessment["evidence_alert_count"] == 1
+        assert assessment["has_trusted_benign_explanation"] is False
+
+    import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_jev_provider_accepts_openrouter_system_one_response():
+    from typesafe_sdk import SystemOneResponse
+
+    async def scenario():
+        response = SystemOneResponse.model_validate(
+            {
+                "id": "gen-dec-test",
+                "model": "typesafe/jev-1.13",
+                "provider": "TypeSafe",
+                "answers": {
+                    "classification": {
+                        "type": "choice",
+                        "choice": "true_positive",
+                        "confidence": 0.93,
+                        "probabilities": {"true_positive": 0.93, "false_positive": 0.07},
+                    },
+                    "severity": {
+                        "type": "choice",
+                        "choice": "critical",
+                        "confidence": 0.87,
+                        "probabilities": {"critical": 0.87, "high": 0.13},
+                    },
+                    "false_positive_probability": {"type": "noul", "noul": 0.08},
+                },
+                "usage": {"input_tokens": 476, "output_tokens": 70, "cost": 0.000019992},
+            }
+        )
+        client = _FakeJevClient(response)
+        client_options = {}
+
+        def client_factory(**kwargs):
+            client_options.update(kwargs)
+            return client
+
+        context = await AITriageService(provider=OfflineAITriageProvider()).build_context(_db(), _incident())
+        provider = JevAITriageProvider(
+            api_key="openrouter-test-key",
+            base_url="https://openrouter.ai/api",
+            model="jev-1.13",
+            client_factory=client_factory,
+        )
+
+        result = await provider.analyze(context)
+
+        assert result.classification == "true_positive"
+        assert result.severity == "critical"
+        assert result.false_positive_probability == 8
+        assert client_options["api_key"] == "openrouter-test-key"
+        assert client_options["base_url"] == "https://openrouter.ai/api"
+        assert client_options["model"] == "jev-1.13"
+        assert len(client.calls) == 1
 
     import asyncio
 
@@ -318,22 +393,61 @@ def test_jev_provider_rejects_out_of_contract_answers():
     asyncio.run(scenario())
 
 
+@pytest.mark.parametrize("value", [float("nan"), float("inf"), float("-inf")])
+def test_jev_provider_rejects_non_finite_probabilities(value):
+    async def scenario():
+        response = SimpleNamespace(
+            choices={
+                "classification": SimpleNamespace(choice="true_positive", confidence=value),
+                "severity": SimpleNamespace(choice="high", confidence=0.9),
+            },
+            nouls={"false_positive_probability": SimpleNamespace(noul=0.1)},
+        )
+        provider = JevAITriageProvider(api_key="test-key", client_factory=lambda **_kwargs: _FakeJevClient(response))
+        context = await AITriageService(provider=OfflineAITriageProvider()).build_context(_db(), _incident())
+        with pytest.raises(AITriageValidationError, match="classification"):
+            await provider.analyze(context)
+
+    import asyncio
+    asyncio.run(scenario())
+
+
+def test_jev_provider_rejects_non_finite_noul():
+    async def scenario():
+        response = SimpleNamespace(
+            choices={
+                "classification": SimpleNamespace(choice="true_positive", confidence=0.9),
+                "severity": SimpleNamespace(choice="high", confidence=0.9),
+            },
+            nouls={"false_positive_probability": SimpleNamespace(noul=float("nan"))},
+        )
+        provider = JevAITriageProvider(api_key="test-key", client_factory=lambda **_kwargs: _FakeJevClient(response))
+        context = await AITriageService(provider=OfflineAITriageProvider()).build_context(_db(), _incident())
+        with pytest.raises(AITriageValidationError, match="false_positive_probability"):
+            await provider.analyze(context)
+
+    import asyncio
+    asyncio.run(scenario())
+
+
 def test_service_builds_jev_provider_from_settings(monkeypatch):
     monkeypatch.setattr(settings, "typesafe_api_key", "configured-key")
-    monkeypatch.setattr(settings, "typesafe_model", "jev-latest")
-    monkeypatch.setattr(settings, "typesafe_base_url", "")
+    monkeypatch.setattr(settings, "typesafe_model", "jev-1.13")
+    monkeypatch.setattr(settings, "typesafe_base_url", "https://openrouter.ai/api")
 
     service = AITriageService(provider_mode="jev")
 
     assert isinstance(service.provider, JevAITriageProvider)
     assert service.provider_mode == "jev"
     assert service.provider.api_key == "configured-key"
+    assert service.provider.model == "jev-1.13"
+    assert service.provider.base_url == "https://openrouter.ai/api"
 
 
 def test_jev_configuration_requires_api_key():
     configured = Settings(
         _env_file=None,
-        app_secret_key="test-secret",
+        app_secret_key="test-secret-value",
         ai_triage_provider_mode="jev",
         typesafe_api_key="",
     )
@@ -503,6 +617,10 @@ def test_alert_count_and_nested_evidence_limits_are_respected(monkeypatch):
 
         context = provider.contexts[0]
         assert len(context.alerts) == 2
+        assert context.assessment.incident_alert_count == 5
+        assert context.assessment.evidence_alert_count == 2
+        assert context.assessment.omitted_alert_count == 3
+        assert context.assessment.evidence_truncated is True
         assert service.last_prompt_envelope is not None
         assert "ignored" not in service.prompt_text(service.last_prompt_envelope)
 

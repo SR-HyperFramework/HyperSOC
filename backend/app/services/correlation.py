@@ -7,7 +7,7 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import UUID, uuid4
 
-from sqlalchemy import select
+from sqlalchemy import select, text
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -130,6 +130,7 @@ class CorrelationService:
     ) -> CorrelationRunOut:
         since = _as_utc(self._clock()) - timedelta(minutes=request.lookback_minutes)
         alerts = await self._load_alerts(db, since=since)
+        alerts = [alert for alert in alerts if _as_utc(alert.timestamp) <= _as_utc(self._clock())]
         candidates: list[_Candidate] = []
         for alert in alerts:
             if request.refresh_threat_intel:
@@ -137,6 +138,7 @@ class CorrelationService:
             candidates.append(await self._candidate(db, alert))
 
         drafts = self._build_drafts(candidates, window=timedelta(minutes=request.window_minutes), min_alerts=request.min_alerts)
+        await self._lock_writes(db)
         created_count = 0
         updated_count = 0
         incident_outputs: list[IncidentDetailOut] = []
@@ -149,7 +151,15 @@ class CorrelationService:
             alert_ids = await self._incident_alert_ids(db, result.incident.id)
             incident_outputs.append(self._incident_detail(result.incident, alert_ids))
 
+        await self._finish_run(db)
         return CorrelationRunOut(created_count=created_count, updated_count=updated_count, incidents=incident_outputs)
+
+    async def _lock_writes(self, db: AsyncSession) -> None:
+        if db.bind.dialect.name == "postgresql":
+            await db.execute(text("SELECT pg_advisory_xact_lock(746021)"))
+
+    async def _finish_run(self, db: AsyncSession) -> None:
+        await db.commit()
 
     async def list_incidents(
         self,
@@ -172,7 +182,9 @@ class CorrelationService:
         return self._incident_detail(row, await self._incident_alert_ids(db, incident_id))
 
     async def _load_alerts(self, db: AsyncSession, *, since: datetime) -> list[Alert]:
-        result = await db.scalars(select(Alert).where(Alert.timestamp >= since).order_by(Alert.timestamp.asc()))
+        closed_alerts = select(IncidentAlert.alert_id).join(Incident, Incident.id == IncidentAlert.incident_id).where(
+            Incident.status.in_(["FALSE_POSITIVE", "RESOLVED", "CONTAINED"]))
+        result = await db.scalars(select(Alert).where(Alert.timestamp >= since, Alert.id.not_in(closed_alerts)).order_by(Alert.timestamp.asc()))
         return list(result.all())
 
     async def _candidate(self, db: AsyncSession, alert: Alert) -> _Candidate:
@@ -218,9 +230,11 @@ class CorrelationService:
     ) -> list[_IncidentDraft]:
         groups: dict[tuple[str, str], list[_Candidate]] = defaultdict(list)
         for candidate in sorted(candidates, key=lambda item: _as_utc(item.normalized.timestamp)):
-            if not candidate.host_key or not candidate.src_ip:
-                continue
-            groups[(candidate.host_key, candidate.src_ip)].append(candidate)
+            host = candidate.host_key or (f"source:{candidate.src_ip}" if candidate.src_ip else None)
+            if host is None:
+                host = f"identity:{candidate.user}" if candidate.user else f"alert:{candidate.alert.id}"
+            pivot = candidate.src_ip or (f"identity:{candidate.user}" if candidate.user else "host_activity")
+            groups[(host, pivot)].append(candidate)
 
         drafts: list[_IncidentDraft] = []
         used_alert_ids: set[UUID] = set()
@@ -248,7 +262,9 @@ class CorrelationService:
         used_alert_ids: set[UUID],
     ) -> None:
         unique = [candidate for candidate in candidates if candidate.alert.id not in used_alert_ids]
-        if len(unique) < min_alerts:
+        # A single high-level detection must reach investigation even without an IP.
+        high_signal = any((candidate.normalized.detection.level or candidate.alert.rule_level or 0) >= 10 for candidate in unique)
+        if not unique or (len(unique) < min_alerts and not high_signal):
             return
         draft = self._draft_from_candidates(unique)
         drafts.append(draft)
@@ -471,7 +487,8 @@ class CorrelationService:
 
     async def _commit(self, db: AsyncSession) -> None:
         try:
-            await db.commit()
+            # Keep the correlation lock until all incident/link writes finish.
+            await db.flush()
         except IntegrityError:
             await db.rollback()
 

@@ -88,6 +88,12 @@ class _MemoryCorrelationService(CorrelationService):
     async def _commit(self, _db) -> None:
         return None
 
+    async def _lock_writes(self, _db) -> None:
+        return None
+
+    async def _finish_run(self, _db) -> None:
+        return None
+
     async def _refresh(self, _db, _row) -> None:
         return None
 

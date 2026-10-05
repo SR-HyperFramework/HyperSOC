@@ -1,5 +1,6 @@
 import hashlib
 import hmac
+import json
 import math
 import time
 
@@ -19,6 +20,27 @@ def sign_payload(secret: str, timestamp: str, body: bytes) -> str:
 
 
 async def verify_wazuh_signature(request: Request) -> bytes:
+    return await _verify_signature(request, settings.app_secret_key)
+
+
+async def verify_hub_signature(request: Request) -> bytes:
+    keys = settings.hub_keys()
+    if not keys:
+        return await verify_wazuh_signature(request)
+    body = await request.body()
+    if len(body) > settings.ingest_max_body_bytes:
+        raise HTTPException(413, "Payload is too large")
+    try:
+        source = json.loads(body).get("source")
+        secret = keys.get(source)
+    except (ValueError, AttributeError, TypeError):
+        secret = None
+    if secret is None:
+        raise HTTPException(401, "Unknown Hub source")
+    return await _verify_signature(request, secret)
+
+
+async def _verify_signature(request: Request, secret: str) -> bytes:
     timestamp = request.headers.get(_TIMESTAMP_HEADER)
     signature = request.headers.get(_SIGNATURE_HEADER)
 
@@ -47,7 +69,7 @@ async def verify_wazuh_signature(request: Request) -> bytes:
     if len(body) > settings.ingest_max_body_bytes:
         raise HTTPException(status.HTTP_413_REQUEST_ENTITY_TOO_LARGE, "Alert payload is too large")
 
-    expected = sign_payload(settings.app_secret_key, timestamp, body)
+    expected = sign_payload(secret, timestamp, body)
     if not hmac.compare_digest(expected, signature):
         raise HTTPException(status.HTTP_401_UNAUTHORIZED, "Invalid signature")
 

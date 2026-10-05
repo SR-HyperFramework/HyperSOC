@@ -58,3 +58,9 @@ class ResponseActionApprovalRequest(_ResponseActionSchema):
 class ResponseActionRejectRequest(_ResponseActionSchema):
     rejected_by: str = Field(min_length=1, max_length=255)
     reason: str = Field(min_length=1, max_length=2000)
+
+
+class ResponseVerificationRequest(_ResponseActionSchema):
+    evidence_id: UUID | None = None
+    evidence_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    notes: str = Field(min_length=1, max_length=2000)

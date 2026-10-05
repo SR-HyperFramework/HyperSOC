@@ -1,38 +1,73 @@
+x-backend-common: &backend-common
+  build:
+    context: .
+    dockerfile: backend/Dockerfile
+    target: runtime
+  env_file:
+    - ${ENV_FILE:-.env}
+  environment:
+    DATABASE_URL: ${DATABASE_URL:-postgresql+asyncpg://${POSTGRES_USER:-soc}:${POSTGRES_PASSWORD:-soc}@postgres:5432/${POSTGRES_DB:-soc}}
+  depends_on:
+    postgres:
+      condition: service_healthy
+
 services:
+  migrate:
+    <<: *backend-common
+    command: ["alembic", "upgrade", "head"]
+    restart: "no"
+
   backend:
-    build:
-      context: .
-      dockerfile: backend/Dockerfile
+    <<: *backend-common
     ports:
-      - "8000:8000"
-    env_file:
-      # Copy .env.example to .env and set a non-default APP_SECRET_KEY.
-      - ${ENV_FILE:-.env}
+      - "${BACKEND_BIND_HOST:-127.0.0.1}:${BACKEND_PORT:-8000}:8000"
     depends_on:
       postgres:
         condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
     volumes:
-      - ./backend:/app
       - ./knowledge:/app/knowledge:ro
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3).read()"
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
 
   postgres:
     image: postgres:16-alpine
     environment:
-      POSTGRES_USER: soc
-      POSTGRES_PASSWORD: soc
-      POSTGRES_DB: soc
-    # Keep PostgreSQL on the private Compose network. Only the backend needs it.
+      POSTGRES_USER: ${POSTGRES_USER:-soc}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-soc}
+      POSTGRES_DB: ${POSTGRES_DB:-soc}
     volumes:
       - postgres_data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U soc"]
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-soc} -d ${POSTGRES_DB:-soc}"]
       interval: 5s
       timeout: 5s
       retries: 10
 
+  worker:
+    <<: *backend-common
+    command: ["python", "-m", "app.workers.soc"]
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./knowledge:/app/knowledge:ro
+
   redis:
     image: redis:7-alpine
-    # Reserved for the queue worker in a later phase; not exposed externally.
+    # Reserved for a later queue worker; not published to the host.
     expose:
       - "6379"
 

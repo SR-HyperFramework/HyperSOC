@@ -1,0 +1,14 @@
+services:
+  migrate:
+    volumes:
+      - ./backend:/app
+
+  backend:
+    volumes:
+      - ./backend:/app
+      - ./knowledge:/app/knowledge:ro
+
+  worker:
+    volumes:
+      - ./backend:/app
+      - ./knowledge:/app/knowledge:ro

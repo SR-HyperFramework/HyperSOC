@@ -48,9 +48,6 @@ AI_TRIAGE_MAX_CONTEXT_CHARS=20000
 AI_TRIAGE_MAX_JSON_DEPTH=6
 AI_TRIAGE_MAX_LIST_ITEMS=50
 AI_TRIAGE_BINARY_PLACEHOLDER=[BINARY_DATA_STRIPPED]
-LLM_BASE_URL=
-LLM_API_KEY=
-LLM_MODEL=
 TYPESAFE_API_KEY=
 TYPESAFE_BASE_URL=
 TYPESAFE_MODEL=jev-latest
@@ -65,20 +62,63 @@ TYPESAFE_MODEL=jev-latest
 ```
 
 `TYPESAFE_BASE_URL` is optional and defaults to the TypeSafe API. Do not commit
-real secrets. `LLM_BASE_URL`, `LLM_API_KEY`, and `LLM_MODEL` remain placeholders
-for other future providers. Offline mode does not require any provider values.
+real secrets. Offline mode does not require any provider values.
+
+### Jev via OpenRouter
+
+The existing TypeSafe SDK also supports OpenRouter's System One endpoint. Create
+an [OpenRouter API key](https://openrouter.ai/keys) and set these values in your
+private `.env` (not `.env.example`):
+
+```dotenv
+AI_TRIAGE_PROVIDER_MODE=jev
+TYPESAFE_API_KEY=<your OpenRouter API key>
+TYPESAFE_BASE_URL=https://openrouter.ai/api
+TYPESAFE_MODEL=jev-1.13
+```
+
+The `TYPESAFE_*` names are the backend's existing SDK settings; the key here
+must be an **OpenRouter** key. Keep the base URL exactly as shown: the SDK adds
+the System One path itself. `jev-1.13` is pinned for reproducible runs; use
+`jev-latest` only if you intentionally want the moving alias. Recreate the
+backend after editing `.env`:
+
+```powershell
+docker compose up -d --build --force-recreate backend
+```
+
+Run the incident triage endpoint below to test with a real incident. That call
+sends its bounded, sanitized incident context to OpenRouter and may incur cost.
+No raw Wazuh event or provider payload is sent, but normalized evidence can
+still contain hostnames, usernames, paths, or other sensitive identifiers;
+review the data boundary before enabling it on production data. Keep the key
+server-side and do not paste it into browser requests or commit it. See the
+[OpenRouter Jev guide](https://openrouter.ai/docs/guides/community/jev) and
+[tutorial](https://openrouter.ai/docs/guides/community/jev-tutorial).
 
 ## Jev decision workflow
 
 Jev is used for the part of triage that fits a System One model: narrow decisions
-with a closed output space. One API request evaluates three independent questions
-in parallel:
+with a closed output space. One API request evaluates three independent questions in parallel. The provider
+state uses `ai_triage_context.v2`, which includes a bounded decision assessment:
+represented/omitted alert counts, detection/authentication/IOC histograms,
+active-response counts, and explicit evidence caveats. Larger incidents use a
+representative selection rather than the first alerts only. This assessment is
+descriptive evidence and never includes source labels or a target verdict.
+
 
 ```text
 classification: true_positive | false_positive | needs_investigation | unknown
 severity:       low | medium | high | critical
 false_positive_probability: 0.0 .. 1.0
 ```
+
+Classification criteria are mutually exclusive. `false_positive` requires an
+affirmative trusted benign/approved/expected explanation; lack of malicious proof
+alone maps to `needs_investigation` or `unknown`. Severity is based on demonstrated
+impact, scope, and urgency rather than alert volume. The NOUL is explicitly the
+probability that the incident is benign or expected, with both true and false
+criteria defined; it is not classification confidence.
 
 The confidence written to `AITriageResult` is the conservative minimum of the
 classification and severity confidence values. Free-form narrative is deliberately
@@ -188,11 +228,11 @@ Example response shape:
 
 - `force=false` reuses existing schema-valid `ai_analysis` if present.
 - `persist=false` returns a validated result without updating the incident row.
-- The current APIs are lab/local endpoints until later authentication, RBAC, and
-  rate limiting phases are implemented.
+- The APIs require SOC sessions and role authorization by default. A local rate
+  limit applies; see [SOC deployment](soc-deployment.md) for accounts and worker operation.
 - Offline triage is a deterministic analyst aid, not an external threat-intel or
   hosted LLM assertion.
 - Jev failures map to `503 Service Unavailable`; structurally invalid Jev answers
   map to `502 Bad Gateway` and are never persisted.
-- AI recommendations are advisory until the later human-in-the-loop response
-  phases add approval and policy enforcement.
+- AI recommendations remain advisory. Analyst conclusion, response approval and
+  endpoint containment verification are separate, audited steps.

@@ -1,10 +1,11 @@
 from uuid import UUID
 
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
 from app.schemas.response_action import ResponseActionApprovalRequest, ResponseActionCreate, ResponseActionOut, ResponseActionRejectRequest
+from app.schemas.response_action import ResponseVerificationRequest
 from app.services.response import ResponseActionConflict, ResponseActionService
 
 router = APIRouter(prefix="/api/v1", tags=["response"])
@@ -19,9 +20,13 @@ def get_response_action_service() -> ResponseActionService:
 async def create_response_action(
     incident_id: UUID,
     request: ResponseActionCreate,
+    http: Request,
     db: AsyncSession = Depends(get_db),
     service: ResponseActionService = Depends(get_response_action_service),
 ) -> ResponseActionOut:
+    principal = getattr(http.state, "principal", None)
+    if principal is not None:
+        request = request.model_copy(update={"requested_by": principal.username})
     try:
         result = await service.create_for_incident(db, incident_id, request)
     except ResponseActionConflict as exc:
@@ -47,9 +52,13 @@ async def list_response_actions(
 async def approve_response_action(
     action_id: UUID,
     request: ResponseActionApprovalRequest,
+    http: Request,
     db: AsyncSession = Depends(get_db),
     service: ResponseActionService = Depends(get_response_action_service),
 ) -> ResponseActionOut:
+    principal = getattr(http.state, "principal", None)
+    if principal is not None:
+        request = request.model_copy(update={"approved_by": principal.username})
     try:
         result = await service.approve(db, action_id, request)
     except ResponseActionConflict as exc:
@@ -63,9 +72,13 @@ async def approve_response_action(
 async def reject_response_action(
     action_id: UUID,
     request: ResponseActionRejectRequest,
+    http: Request,
     db: AsyncSession = Depends(get_db),
     service: ResponseActionService = Depends(get_response_action_service),
 ) -> ResponseActionOut:
+    principal = getattr(http.state, "principal", None)
+    if principal is not None:
+        request = request.model_copy(update={"rejected_by": principal.username})
     try:
         result = await service.reject(db, action_id, request)
     except ResponseActionConflict as exc:
@@ -87,4 +100,16 @@ async def execute_response_action(
         raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
     if result is None:
         raise HTTPException(status.HTTP_404_NOT_FOUND, "Response action not found")
+    return result
+
+
+@router.post("/actions/{action_id}/verify", response_model=ResponseActionOut)
+async def verify_response_action(action_id: UUID, request: ResponseVerificationRequest, db: AsyncSession = Depends(get_db), service: ResponseActionService = Depends(get_response_action_service)):
+    try:
+        evidence_ids = list(dict.fromkeys([*request.evidence_ids, *([request.evidence_id] if request.evidence_id else [])]))
+        result = await service.verify(db, action_id, evidence_ids, request.notes)
+    except ResponseActionConflict as exc:
+        raise HTTPException(status.HTTP_409_CONFLICT, str(exc)) from exc
+    if result is None:
+        raise HTTPException(404, "Response action not found")
     return result

@@ -1,0 +1,152 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>HyperSOC · Investigator</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, ui-sans-serif, system-ui, sans-serif; background: #0b1220; color: #e6ecf5; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    main { max-width: 1120px; padding: 32px 20px 80px; margin: auto; }
+    header { display: flex; justify-content: space-between; align-items: end; gap: 20px; border-bottom: 1px solid #334155; padding-bottom: 22px; }
+    h1 { margin: 0; font-size: clamp(1.8rem, 4vw, 2.8rem); }
+    h2 { margin-top: 0; font-size: 1.1rem; }
+    .eyebrow { color: #7dd3fc; letter-spacing: .12em; text-transform: uppercase; font-size: .72rem; font-weight: 700; }
+    .muted, small { color: #94a3b8; }
+    .toolbar { display: flex; gap: 12px; margin: 24px 0; flex-wrap: wrap; align-items: end; }
+    label { display: grid; gap: 6px; font-size: .84rem; color: #cbd5e1; }
+    select, input, textarea { background: #111d30; border: 1px solid #40516b; border-radius: 8px; padding: 10px 12px; color: #f1f5f9; font: inherit; }
+    #incident { min-width: min(100%, 520px); max-width: 100%; }
+    button { background: #38bdf8; color: #082034; border: 0; border-radius: 8px; padding: 11px 16px; font: inherit; font-weight: 700; cursor: pointer; }
+    button:disabled { opacity: .45; cursor: default; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .panel { background: #111d30; border: 1px solid #334155; border-radius: 12px; padding: 20px; margin: 0 0 16px; }
+    .wide { grid-column: 1 / -1; }
+    .badge { display: inline-block; border: 1px solid #475569; border-radius: 999px; padding: 4px 10px; font-size: .76rem; margin-right: 8px; }
+    ul { padding-left: 20px; }
+    li { margin: 10px 0; line-height: 1.5; }
+    .evidence { border-top: 1px solid #334155; padding: 13px 0; }
+    .evidence:first-child { border-top: 0; }
+    .evidence pre { white-space: pre-wrap; overflow-wrap: anywhere; color: #cbd5e1; font-size: .8rem; margin: 8px 0 0; }
+    .review { display: grid; gap: 12px; }
+    #reviewer { max-width: 400px; }
+    #notes { min-height: 80px; }
+    #message { min-height: 24px; }
+    @media (max-width: 700px) { .grid { grid-template-columns: 1fr; } header { display: block; } }
+  </style>
+</head>
+<body>
+<main>
+  <header><div><p class="eyebrow">HyperSOC / Analyst workspace</p><h1>Incident investigator</h1></div><p class="muted">Read-only investigation · Human decision required</p></header>
+  <div class="toolbar">
+    <label>Incident <select id="incident"><option value="">Loading incidents…</option></select></label>
+    <button id="run" type="button" disabled>Run investigation</button>
+    <button id="refresh" type="button">Refresh list</button>
+  </div>
+  <p id="message" role="status" class="muted"></p>
+  <div id="result" class="grid" hidden>
+    <section class="panel wide"><h2 id="title">Investigation</h2><div id="meta"></div><p class="muted" id="scope"></p></section>
+    <section class="panel"><h2>Findings</h2><ul id="findings"></ul></section>
+    <section class="panel"><h2>Gaps & next steps</h2><ul id="gaps"></ul><h2>Next steps</h2><ul id="steps"></ul></section>
+    <section class="panel wide"><h2>Evidence ledger</h2><div id="evidence"></div></section>
+    <section class="panel wide"><h2>Analyst review</h2><p class="muted">Review only records your decision. It does not execute a response action.</p>
+      <form id="review" class="review">
+        <label>Reviewer name <input id="reviewer" required maxlength="255" autocomplete="name"></label>
+        <label>Final classification <select id="classification"><option value="true_positive">True positive</option><option value="false_positive">False positive</option><option value="needs_investigation">Needs investigation</option><option value="unknown">Unknown</option></select></label>
+        <label>Notes <textarea id="notes" maxlength="2000" placeholder="Why did you confirm or correct the result?"></textarea></label>
+        <div><button id="save" type="submit">Save review</button></div>
+      </form>
+    </section>
+  </div>
+</main>
+<script>
+  const $ = id => document.getElementById(id);
+  let incidents = [];
+  let current = null;
+  const message = text => { $('message').textContent = text; };
+  async function api(path, options = {}) {
+    const response = await fetch(path, { ...options, headers: { 'Content-Type': 'application/json', ...(options.headers || {}) } });
+    const payload = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(payload.detail || `Request failed (${response.status})`);
+    return payload;
+  }
+  function addText(parent, tag, value) {
+    const node = document.createElement(tag);
+    node.textContent = value;
+    parent.appendChild(node);
+    return node;
+  }
+  function fillList(id, values, empty) {
+    const target = $(id); target.replaceChildren();
+    if (!values.length) { addText(target, 'li', empty); return; }
+    for (const value of values) addText(target, 'li', value);
+  }
+  function render(run) {
+    current = run;
+    $('result').hidden = false;
+    const incident = incidents.find(item => item.id === run.incident_id);
+    $('title').textContent = incident ? incident.title : `Incident ${run.incident_id}`;
+    $('meta').replaceChildren();
+    for (const label of [run.status, run.report.classification.replaceAll('_', ' '), run.provider_mode + (run.model_name ? ` · ${run.model_name}` : '')]) addText($('meta'), 'span', label).className = 'badge';
+    $('scope').textContent = `Tools: ${run.plan.tools.join(', ')} · ${run.evidence.length} evidence items · Created ${new Date(run.created_at).toLocaleString()}`;
+    const findings = $('findings'); findings.replaceChildren();
+    if (!run.report.findings.length) addText(findings, 'li', 'No supported findings.');
+    for (const finding of run.report.findings) addText(findings, 'li', `${finding.claim} [${finding.evidence_ids.join(', ')}]`);
+    fillList('gaps', run.report.gaps, 'No gaps listed.');
+    fillList('steps', run.report.next_steps, 'No next steps listed.');
+    const ledger = $('evidence'); ledger.replaceChildren();
+    if (!run.evidence.length) addText(ledger, 'p', 'No evidence collected.');
+    for (const item of run.evidence) {
+      const block = addText(ledger, 'div', ''); block.className = 'evidence';
+      addText(block, 'strong', `${item.id} · ${item.source} · ${item.source_ref}`);
+      addText(block, 'small', ` · ${item.observed_at ? 'Observed ' + new Date(item.observed_at).toLocaleString() : 'Collected ' + new Date(item.collected_at).toLocaleString()}`);
+      addText(block, 'pre', item.content);
+    }
+    $('classification').value = run.final_classification || run.report.classification;
+    $('reviewer').value = run.reviewed_by || $('reviewer').value;
+    $('notes').value = run.reviewer_notes || '';
+    $('save').disabled = run.status !== 'PENDING_REVIEW';
+    message(run.status === 'PENDING_REVIEW' ? 'Investigation ready for analyst review.' : `Reviewed: ${run.status}.`);
+  }
+  async function loadIncidents() {
+    try {
+      const selected = $('incident').value;
+      incidents = await api('/api/v1/incidents?limit=100');
+      $('incident').replaceChildren();
+      addText($('incident'), 'option', 'Choose an incident').value = '';
+      for (const item of incidents) addText($('incident'), 'option', `${item.severity.toUpperCase()} · ${item.title} · ${item.id.slice(0, 8)}`).value = item.id;
+      $('incident').value = selected;
+      $('run').disabled = !$('incident').value;
+      message(`${incidents.length} incidents loaded.`);
+    } catch (error) { message(error.message); }
+  }
+  $('incident').addEventListener('change', async () => {
+    $('run').disabled = !$('incident').value;
+    $('result').hidden = true;
+    if (!$('incident').value) return;
+    try {
+      const runs = await api(`/api/v1/incidents/${$('incident').value}/investigations?limit=1`);
+      if (runs.length) render(runs[0]); else message('No investigation yet. Run one to collect evidence.');
+    } catch (error) { message(error.message); }
+  });
+  $('run').addEventListener('click', async () => {
+    const incidentId = $('incident').value; if (!incidentId) return;
+    $('run').disabled = true; message('Collecting evidence and drafting report…');
+    try { render(await api(`/api/v1/incidents/${incidentId}/investigations`, { method: 'POST' })); }
+    catch (error) { message(error.message); }
+    finally { $('run').disabled = false; }
+  });
+  $('refresh').addEventListener('click', loadIncidents);
+  $('review').addEventListener('submit', async event => {
+    event.preventDefault(); if (!current || current.status !== 'PENDING_REVIEW') return;
+    $('save').disabled = true;
+    try {
+      const body = { reviewed_by: $('reviewer').value, classification: $('classification').value, notes: $('notes').value };
+      render(await api(`/api/v1/investigations/${current.id}/review`, { method: 'POST', body: JSON.stringify(body) }));
+    } catch (error) { message(error.message); $('save').disabled = false; }
+  });
+  loadIncidents();
+</script>
+</body>
+</html>

@@ -10,6 +10,8 @@ keeps the original Wazuh alert in ``raw`` and sends a small, stable envelope
 that the backend can validate independently of Wazuh decoder details.
 """
 
+from __future__ import annotations
+
 import hashlib
 import hmac
 import json
@@ -310,7 +312,10 @@ def main() -> int:
     try:
         with open(alert_file, encoding="utf-8") as file_handle:
             alert = json.load(file_handle)
-        payload = normalize(alert)
+        if hook_url.rstrip("/").endswith("/api/v1/hub/native-events"):
+            payload = {"format": "wazuh", "source": "wazuh", "event": alert}
+        else:
+            payload = normalize(alert)
         send(hook_url, api_key, payload)
     except (OSError, json.JSONDecodeError, ValueError) as exc:
         logger.error("Failed to read or normalize Wazuh alert: %s", exc)

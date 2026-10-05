@@ -9,6 +9,11 @@ from app.core.config import settings
 from app.core.database import Base
 from app.models.alert import Alert  # noqa: F401 - registers table metadata
 from app.models.incident import Incident, IncidentAlert  # noqa: F401
+from app.models.investigation import Investigation  # noqa: F401
+from app.models.hub import HubEntity, HubEvidence, HubRelationship  # noqa: F401
+from app.models.workflow import WorkflowJob  # noqa: F401
+from app.models.behavior import BehaviorModel  # noqa: F401
+from app.models.identity import AuditEvent, SOCUser  # noqa: F401
 from app.models.response_action import ResponseAction  # noqa: F401
 from app.models.threat_intel import AlertThreatIntel, ThreatIntelIndicator  # noqa: F401
 

@@ -40,7 +40,7 @@ class IncidentDetailOut(IncidentOut):
 class CorrelationRunRequest(_IncidentSchema):
     lookback_minutes: int = Field(default=60, ge=1, le=10_080)
     window_minutes: int = Field(default=10, ge=1, le=1_440)
-    min_alerts: int = Field(default=2, ge=2, le=100)
+    min_alerts: int = Field(default=2, ge=1, le=100)
     refresh_threat_intel: bool = False
 
 

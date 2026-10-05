@@ -8,6 +8,7 @@ from typing import Any, Protocol
 import httpx
 
 from app.core.config import settings
+from app.core.validation import parse_wazuh_agent_list
 from app.models.response_action import ResponseAction
 
 _AGENT_ID_RE = re.compile(r"^[0-9]{1,8}$")
@@ -47,15 +48,8 @@ class SIEMProvider(Protocol):
 
 
 def parse_agent_list(value: str) -> list[str]:
-    """Containment is scoped to explicitly named agents, never to the whole fleet."""
-    agents = [item.strip() for item in value.split(",") if item.strip()]
-    if not agents:
-        raise ValueError("WAZUH_ACTIVE_RESPONSE_AGENTS must list at least one Wazuh agent id")
-    if any(agent.casefold() in ("all", "*") for agent in agents):
-        raise ValueError("WAZUH_ACTIVE_RESPONSE_AGENTS must list explicit agent ids, not 'all' or '*'")
-    if any(not _AGENT_ID_RE.fullmatch(agent) for agent in agents):
-        raise ValueError("WAZUH_ACTIVE_RESPONSE_AGENTS must contain numeric Wazuh agent ids such as 001,002")
-    return agents
+    """Backward-compatible public wrapper for active-response scope parsing."""
+    return parse_wazuh_agent_list(value)
 
 
 def _mapping(value: Any) -> dict[str, Any]:
@@ -88,6 +82,8 @@ class OfflineWazuhActiveResponseProvider:
                 "duration_minutes": action.duration_minutes,
                 "command": "firewall-drop",
                 "execution_mode": "offline",
+                "containment_verified": False,
+                "delivery_state": "simulated",
             },
         )
 
@@ -124,7 +120,7 @@ class WazuhActiveResponseProvider:
 
         async with self.client_factory(timeout=self.timeout_seconds, verify=self.verify_tls) as client:
             token = await self._authenticate(client)
-            payload = await self._send_active_response(client, token, action.target)
+            payload = await self._send_active_response(client, token, action.target, str(action.id))
         return self._result(action, payload)
 
     async def _authenticate(self, client: httpx.AsyncClient) -> str:
@@ -147,7 +143,7 @@ class WazuhActiveResponseProvider:
             raise SIEMResponseError("Wazuh API authentication response did not include a token")
         return token
 
-    async def _send_active_response(self, client: httpx.AsyncClient, token: str, target: str) -> dict[str, Any]:
+    async def _send_active_response(self, client: httpx.AsyncClient, token: str, target: str, action_id: str) -> dict[str, Any]:
         try:
             response = await client.put(
                 f"{self.base_url}/active-response",
@@ -156,7 +152,10 @@ class WazuhActiveResponseProvider:
                 json={
                     "command": self.command,
                     "arguments": [],
-                    "alert": {"data": {"srcip": target}},
+                    "alert": {"data": {
+                        "srcip": target,
+                        "hypersoc_response": {"action_id": action_id, "target": target},
+                    }},
                 },
             )
         except httpx.HTTPError as exc:
@@ -187,7 +186,7 @@ class WazuhActiveResponseProvider:
         api_error = _safe_int(payload.get("error"))
         requested_count = len(self.agents)
 
-        contained = api_error == 0 and failed_count == 0 and affected_count == requested_count
+        accepted = api_error == 0 and failed_count == 0 and affected_count == requested_count
         metadata = {
             "agents_requested": list(self.agents),
             "agents_affected": affected,
@@ -198,20 +197,22 @@ class WazuhActiveResponseProvider:
             "command": self.command,
             "duration_minutes": action.duration_minutes,
             "execution_mode": "wazuh",
+            "containment_verified": False,
+            "delivery_state": "accepted" if accepted else "incomplete",
         }
 
-        if contained:
-            message = f"Wazuh applied the BLOCK_IP command on all {requested_count} requested agents."
+        if accepted:
+            message = f"Wazuh Manager accepted the BLOCK_IP command for all {requested_count} requested agents. Endpoint containment requires verification."
         else:
             message = (
-                f"Wazuh did not apply the BLOCK_IP command on every requested agent: "
+                f"Wazuh did not accept the BLOCK_IP command for every requested agent: "
                 f"{affected_count} of {requested_count} affected, {failed_count} failed."
             )
         return SIEMExecutionResult(
             provider="wazuh-active-response",
             action=action.type,
             target=action.target,
-            status="SUCCESS" if contained else "FAILED",
+            status="SUCCESS" if accepted else "FAILED",
             message=message,
             metadata=metadata,
         )
