@@ -1,10 +1,6 @@
 <a id="readme-top"></a>
-
-[![Stars][stars-shield]][stars-url]
-[![Forks][forks-shield]][forks-url]
-[![Issues][issues-shield]][issues-url]
-
 <div align="center">
+  <img src="https://cdn.h26v.io.vn/1791259638111-bab4b94e232c4f42.png" alt="HyperSOC" width="200" height="200" />
   <h1>HyperSOC</h1>
   <p>
     An evidence-driven SOC automation lab built around Wazuh,
