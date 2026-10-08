@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -686,5 +687,28 @@ def test_missing_incident_returns_none():
         assert output is None
 
     import asyncio
+
+    asyncio.run(scenario())
+
+
+def test_context_over_prompt_budget_is_reduced_instead_of_breaking_schema():
+    async def scenario():
+        # Production failure: an incident whose context exceeded the sanitizer budget had
+        # its keys replaced by "[CONTEXT_TRUNCATED]" and failed schema validation forever.
+        service = AITriageService(provider=OfflineAITriageProvider(), max_context_chars=2200)  # full context needs ~2420
+        context = await service.build_context(_db(), _incident())
+        dumped = json.dumps(context.model_dump(mode="json"))
+        assert "[CONTEXT_TRUNCATED]" not in dumped and "context-truncated" not in dumped
+        assert "prompt budget" in context.internal_context["prompt_reduction"]
+        assert context.assessment.incident_alert_count == 1
+
+    asyncio.run(scenario())
+
+
+def test_context_that_cannot_fit_prompt_budget_raises_typed_error():
+    async def scenario():
+        service = AITriageService(provider=OfflineAITriageProvider(), max_context_chars=100)
+        with pytest.raises(AITriageValidationError, match="prompt budget"):
+            await service.build_context(_db(), _incident())
 
     asyncio.run(scenario())

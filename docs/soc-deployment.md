@@ -175,8 +175,23 @@ When the latest report replaces an older workflow report, reviewing it resolves
 the older job as `SUPERSEDED`. Reviewing the job's current report sets `REVIEWED`.
 The original generated reports remain available for audit.
 
-In authenticated mode, response approval and execution both recheck the latest
-analyst-confirmed TP report and target policy. Names are taken from the account.
+The worker does not re-investigate an incident for every new alert. Each report
+records a digest of the incident's material facts: title (pattern), severity,
+MITRE techniques, primary host/user/source IP, and alert volume bucketed by powers
+of two. An alert that leaves the digest unchanged reuses the current report, skips
+triage and investigation model calls, and ends its job as `COALESCED`. A burst of
+similar alerts therefore refreshes the report at 1, 2, 4, 8… alerts. A new
+technique, severity, pivot or pattern triggers a fresh report immediately.
+Manual "Run investigation" always creates a new report.
+
+In authenticated mode, response approval and execution both recheck the analyst
+decision and target policy. The most recent analyst decision governs: it must be
+true positive. Newer unreviewed drafts do not revoke it, so an attack that keeps
+producing evidence stays containable. The exception is a newer draft concluding
+`false_positive`, which blocks until an analyst reviews it. Non-committal drafts
+(`needs_investigation`, `unknown`, and every offline draft) do not. A later analyst
+false-positive decision revokes an approved but unexecuted response. Names are
+taken from the account.
 `offline` records simulation. Real Wazuh mode requires explicit agent IDs and
 records Manager acceptance separately from endpoint effect. Unknown/interrupted
 execution is not retried automatically, because a duplicate firewall action may

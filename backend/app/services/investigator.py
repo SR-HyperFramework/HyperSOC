@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from datetime import datetime, timezone
 from uuid import UUID, uuid4
@@ -46,6 +47,20 @@ class InvestigationValidationError(InvestigationError):
 
 class InvestigationReviewConflict(InvestigationError):
     pass
+
+
+def incident_signature(incident: Incident) -> str:
+    """Digest of the facts whose change warrants a fresh investigation.
+
+    Alert volume is bucketed by powers of two, so a burst of similar alerts
+    refreshes the report O(log n) times instead of once per alert.
+    """
+    material = {
+        "title": incident.title, "severity": incident.severity, "mitre_ids": sorted(incident.mitre_ids or []),
+        "host": incident.primary_host, "user": incident.primary_user, "src_ip": incident.primary_src_ip,
+        "alert_volume": max(1, incident.alert_count or 0).bit_length(),
+    }
+    return hashlib.sha256(json.dumps(material, sort_keys=True).encode()).hexdigest()
 
 
 _PLAN_SCHEMA = {
@@ -174,6 +189,7 @@ class InvestigationService:
         incident = await db.get(Incident, incident_id)
         if incident is None:
             return None
+        signature = incident_signature(incident)
         overview = self._overview(incident)
         plan = await self.provider.plan(overview) if self.provider else InvestigationPlan(
             tools=["incident_alerts", "cached_intel", "knowledge_search", "internal_context"][:settings.investigator_max_tool_calls]
@@ -211,7 +227,7 @@ class InvestigationService:
         row = Investigation(
             id=uuid4(), incident_id=incident_id, provider_mode=self.provider_mode,
             model_name=self.provider.model if self.provider else None,
-            workflow_key=workflow_key,
+            workflow_key=workflow_key, incident_signature=signature,
             created_at=datetime.now(timezone.utc),
             status="PENDING_REVIEW", plan=plan.model_dump(mode="json"),
             evidence=[item.model_dump(mode="json") for item in evidence], report=report.model_dump(mode="json"),
@@ -227,6 +243,14 @@ class InvestigationService:
             .order_by(Investigation.created_at.desc(), Investigation.id.desc()).limit(limit)
         )
         return [InvestigationOut.model_validate(row) for row in rows]
+
+    async def current_for(self, db: AsyncSession, incident: Incident) -> Investigation | None:
+        """Return the latest report if the incident has not materially changed since it was generated."""
+        latest = await db.scalar(select(Investigation).where(Investigation.incident_id == incident.id)
+            .order_by(Investigation.created_at.desc(), Investigation.id.desc()).limit(1))
+        if latest is not None and latest.incident_signature == incident_signature(incident):
+            return latest
+        return None
 
     async def get(self, db: AsyncSession, investigation_id: UUID) -> InvestigationOut | None:
         row = await db.get(Investigation, investigation_id)

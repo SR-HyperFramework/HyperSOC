@@ -32,6 +32,7 @@ Network-dependent checks are separate:
 ```bash
 make benchmark-verify       # verify the three public-derived pilot cases
 make benchmark-workload     # process all 738 alerts from the pinned source
+make benchmark-worker       # same alerts through ingestion and the durable worker
 ```
 
 Results are written below `.benchmark-runs/`, which is ignored by Git. Workload

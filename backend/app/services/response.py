@@ -46,6 +46,27 @@ def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+
+async def containment_blocker(db: AsyncSession, incident_id: UUID) -> str | None:
+    """Return why containment is not authorized, or None when it is.
+
+    The most recent analyst decision governs. Newer AI drafts awaiting review do not
+    revoke it (a growing attack must stay containable), except a draft concluding
+    false_positive, which blocks until an analyst reviews it. Non-committal drafts
+    (needs_investigation/unknown, including every offline draft) do not contradict it.
+    """
+    reports = (await db.scalars(select(Investigation).where(Investigation.incident_id == incident_id)
+        .order_by(Investigation.created_at.desc(), Investigation.id.desc()))).all()
+    for report in reports:
+        if report.status == "PENDING_REVIEW":
+            if (report.report or {}).get("classification") == "false_positive":
+                return "A newer investigation draft concludes false positive, contradicting the analyst-confirmed true-positive conclusion; review it first"
+            continue
+        if report.final_classification == "true_positive":
+            return None
+        break
+    return "The latest analyst decision must be an analyst-confirmed true-positive conclusion"
+
 class ResponseActionNotFound(Exception):
     pass
 
@@ -167,9 +188,9 @@ class ResponseActionService:
             raise ResponseActionConflict("Only PENDING response actions can be approved")
         if settings.auth_enabled:
             await db.get(Incident, row.incident_id, with_for_update=True)
-            latest = await db.scalar(select(Investigation).where(Investigation.incident_id == row.incident_id).order_by(Investigation.created_at.desc(), Investigation.id.desc()).limit(1))
-            if latest is None or latest.final_classification != "true_positive" or latest.status == "PENDING_REVIEW":
-                raise ResponseActionConflict("The latest investigation must have an analyst-confirmed true-positive conclusion")
+            blocked = await containment_blocker(db, row.incident_id)
+            if blocked:
+                raise ResponseActionConflict(blocked)
         policy_result = self.policy.validate(
             ResponseActionCreate(
                 type=row.type,
@@ -218,9 +239,9 @@ class ResponseActionService:
             raise ResponseActionConflict("Only APPROVED response actions can be executed")
         if settings.auth_enabled:
             await db.get(Incident, row.incident_id, with_for_update=True)
-            latest = await db.scalar(select(Investigation).where(Investigation.incident_id == row.incident_id).order_by(Investigation.created_at.desc(), Investigation.id.desc()).limit(1))
-            if latest is None or latest.final_classification != "true_positive" or latest.status == "PENDING_REVIEW":
-                raise ResponseActionConflict("The latest investigation must still have an analyst-confirmed true-positive conclusion")
+            blocked = await containment_blocker(db, row.incident_id)
+            if blocked:
+                raise ResponseActionConflict(f"Execution must still be supported by the analyst decision: {blocked}")
         validated = self.policy.validate(ResponseActionCreate(type=row.type, target=row.target, reason=row.reason, risk=row.risk, requested_by=row.requested_by, duration_minutes=row.duration_minutes))
         if not validated.allowed:
             raise ResponseActionConflict("; ".join(validated.reasons))

@@ -120,25 +120,33 @@ class SOCWorkflow:
                 ids = [str(incident.id) for incident in result.incidents if alert.id in incident.alert_ids]
                 await self._checkpoint(db, job, token, "conclusion", incident_ids=ids)
             investigations = dict(job.output.get("investigations", {}))
+            coalesced = dict(job.output.get("coalesced", {}))
             for incident_id in job.output["incident_ids"]:
-                if incident_id in investigations:
+                if incident_id in investigations or incident_id in coalesced:
                     continue
                 incident = await db.get(Incident, UUID(incident_id))
-                if incident.status in {"FALSE_POSITIVE", "RESOLVED", "CONTAINED"}:
+                if incident is None or incident.status in {"FALSE_POSITIVE", "RESOLVED", "CONTAINED"}:
+                    continue
+                # An alert that does not materially change the incident is covered by its
+                # current report; re-running would cost model calls and reset analyst review.
+                current = await self.investigator.current_for(db, incident)
+                if current is not None:
+                    coalesced[incident_id] = str(current.id)
+                    await self._checkpoint(db, job, token, "conclusion", coalesced=coalesced)
                     continue
                 context = await self.hub.context(db, incident)
                 await self.triage.run(db, incident.id, AITriageRunRequest(force=True))
                 run = await self.investigator.run(db, incident.id, workflow_key=f"{job.id}:{incident.id}")
                 investigations[incident_id] = str(run.id)
                 await self._checkpoint(db, job, token, "conclusion", investigations=investigations, context_gaps=context.gaps)
-            await self._checkpoint(db, job, token, "analyst_review", investigations=investigations)
+            await self._checkpoint(db, job, token, "analyst_review", investigations=investigations, coalesced=coalesced)
             owner = await db.scalar(select(WorkflowJob).where(
                 WorkflowJob.id == job.id, WorkflowJob.status == "PROCESSING", WorkflowJob.lease_token == token,
                 WorkflowJob.lease_until > now(),
             ).with_for_update())
             if owner is None:
                 raise WorkflowLeaseLost("Workflow was claimed by another worker")
-            job.status = await workflow_review_status(db, job.id)
+            job.status = await workflow_review_status(db, job.id, coalesced=bool(coalesced))
             job.lease_until = None
             job.lease_token = None
             await db.commit()

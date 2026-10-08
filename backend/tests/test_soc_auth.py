@@ -95,10 +95,11 @@ def test_stale_review_cannot_override_latest_report_or_approved_response(monkeyp
             with pytest.raises(InvestigationReviewConflict, match="newer investigation"):
                 await investigator.review(db, second.id, InvestigationReviewRequest(reviewed_by="alice", classification="false_positive"))
             await db.rollback()
+            # A later analyst false-positive decision revokes the approved response.
+            await investigator.review(db, third.id, InvestigationReviewRequest(reviewed_by="alice", classification="false_positive"))
             with pytest.raises(ResponseActionConflict, match="must still"):
                 await service.execute(db, action.id)
             await db.rollback()
-            await investigator.review(db, third.id, InvestigationReviewRequest(reviewed_by="alice", classification="false_positive"))
             incident = await db.get(Incident, incident_id)
             assert incident.status == "FALSE_POSITIVE"
     run(scenario)
@@ -119,4 +120,41 @@ def test_response_approval_requires_latest_reviewed_true_positive(monkeypatch):
             monkeypatch.setattr(settings, "auth_enabled", True)
             with pytest.raises(ResponseActionConflict, match="analyst-confirmed"):
                 await service.approve(db, action.id, ResponseActionApprovalRequest(approved_by="alice"))
+    run(scenario)
+
+
+@pytest.mark.parametrize(("draft", "allowed"), [("true_positive", True), ("needs_investigation", True), ("false_positive", False)])
+def test_newer_draft_blocks_containment_only_when_it_concludes_false_positive(monkeypatch, draft, allowed):
+    async def scenario(factory):
+        from datetime import timedelta
+        from app.schemas.investigation import InvestigationReviewRequest
+        from app.schemas.response_action import ResponseActionCreate, ResponseActionApprovalRequest
+        from app.services.investigator import InvestigationService
+        from app.services.knowledge_base import KnowledgeBaseService
+        from app.services.response import ResponseActionService, ResponseActionConflict
+        monkeypatch.setattr(settings, "auth_enabled", True)
+        async with factory() as db:
+            await ingest(db, detection())
+            workflow = SOCWorkflow()
+            await workflow.process(db, await workflow.claim(db))
+            first = await db.scalar(select(Investigation))
+            investigator = InvestigationService(knowledge_base=KnowledgeBaseService())
+            await investigator.review(db, first.id, InvestigationReviewRequest(reviewed_by="alice", classification="true_positive"))
+            # New evidence arrives during an active attack and produces an unreviewed draft.
+            db.add(Investigation(
+                id=uuid4(), incident_id=first.incident_id, provider_mode="offline", status="PENDING_REVIEW",
+                plan={"tools": ["incident_alerts"]}, evidence=[],
+                report={"classification": draft, "findings": [], "gaps": [], "next_steps": []},
+                created_at=first.created_at + timedelta(seconds=1),
+            ))
+            await db.commit()
+            service = ResponseActionService()
+            action = await service.create_for_incident(db, first.incident_id, ResponseActionCreate(type="BLOCK_IP", target="8.8.8.8", reason="Confirmed case"))
+            if allowed:
+                await service.approve(db, action.id, ResponseActionApprovalRequest(approved_by="alice"))
+                result = await service.execute(db, action.id)
+                assert result.status == "SUCCESS"
+            else:
+                with pytest.raises(ResponseActionConflict, match="concludes false positive"):
+                    await service.approve(db, action.id, ResponseActionApprovalRequest(approved_by="alice"))
     run(scenario)

@@ -4,6 +4,7 @@ import ipaddress
 import json
 import math
 from collections import Counter
+from collections.abc import Iterator
 from typing import Any, Protocol
 from uuid import UUID
 
@@ -515,7 +516,15 @@ class AITriageService:
 
     async def build_prompt_envelope(self, db: AsyncSession, incident: Incident) -> AITriagePromptEnvelope:
         raw_context = await self._build_raw_context(db, incident)
-        sanitized = self.sanitizer.sanitize(raw_context.model_dump(mode="json"))
+        # Exhausting the sanitizer budget replaces keys and values with placeholders,
+        # which breaks the strict schema. Shrink the context until it fits instead.
+        budget = self.sanitizer.config.max_context_chars
+        for candidate in self._reduced_contexts(raw_context):
+            sanitized = self.sanitizer.sanitize(candidate.model_dump(mode="json"))
+            if sanitized.metadata.total_chars < budget:
+                break
+        else:
+            raise AITriageValidationError("Incident context does not fit the prompt budget even after reduction")
         context = AITriageContext.model_validate(sanitized.value)
         return AITriagePromptEnvelope(
             system_instruction=_AI_TRIAGE_SYSTEM_INSTRUCTION,
@@ -605,6 +614,48 @@ class AITriageService:
                 "analytics": internal.analytics,
             },
         )
+
+    def _reduced_contexts(self, context: AITriageContext) -> Iterator[AITriageContext]:
+        """Yield the full context, then progressively smaller copies.
+
+        Least decision-relevant material goes first (retrieved playbooks, bulky Hub
+        context), then the alert sample is thinned keeping the first and last alert.
+        The assessment always summarizes every linked alert and is never reduced.
+        """
+        yield context
+        note = "Context was reduced to fit the prompt budget; the assessment still covers every linked alert."
+        internal = dict(context.internal_context)
+        current = context.model_copy(update={
+            "playbook_context": context.playbook_context[:1],
+            "internal_context": {
+                **internal, "prompt_reduction": note, "posture": [],
+                "historical_incidents": list(internal.get("historical_incidents") or [])[:2],
+                "assets": list(internal.get("assets") or [])[:3],
+                "identities": list(internal.get("identities") or [])[:3],
+            },
+        })
+        yield current
+        while len(current.alerts) > 2:
+            alerts = current.alerts[::2] + ([current.alerts[-1]] if (len(current.alerts) - 1) % 2 else [])
+            current = self._with_alert_sample(current, alerts)
+            yield current
+        current = current.model_copy(update={
+            "enrichment": current.enrichment[:5], "mitre_context": current.mitre_context[:5], "playbook_context": [],
+            "internal_context": {"prompt_reduction": note, "gaps": list(internal.get("gaps") or [])[:5]},
+        })
+        yield current
+        yield self._with_alert_sample(current, current.alerts[-1:]).model_copy(update={"enrichment": [], "mitre_context": []})
+
+    @staticmethod
+    def _with_alert_sample(context: AITriageContext, alerts: list[AITriageAlertEvidence]) -> AITriageContext:
+        assessment = context.assessment
+        caveat = "Alert evidence sample was reduced to fit the prompt budget."
+        return context.model_copy(update={"alerts": alerts, "assessment": assessment.model_copy(update={
+            "evidence_alert_count": len(alerts),
+            "omitted_alert_count": max(0, assessment.incident_alert_count - len(alerts)),
+            "evidence_truncated": True,
+            "caveats": assessment.caveats if caveat in assessment.caveats else [*assessment.caveats, caveat][:20],
+        })})
 
     def _representative_alerts(
         self,

@@ -359,6 +359,77 @@ def test_retry_api_loads_server_updated_timestamp_before_serializing():
     run(scenario)
 
 
+def test_alert_burst_reinvestigates_only_on_material_change():
+    async def scenario(factory):
+        async with factory() as db:
+            workflow = SOCWorkflow()
+            triage_calls = []
+            original = workflow.triage.run
+            async def counted(*args, **kwargs):
+                triage_calls.append(args[1])
+                return await original(*args, **kwargs)
+            workflow.triage.run = counted
+            jobs = []
+            for index in range(8):
+                await ingest(db, detection(f"burst-{index}", when=NOW - timedelta(minutes=9) + timedelta(minutes=index)))
+                job = await workflow.claim(db)
+                await workflow.process(db, job)
+                jobs.append(job)
+            reports = (await db.scalars(select(Investigation))).all()
+            assert len({report.incident_id for report in reports}) == 1
+            # Alert volume is bucketed by powers of two: reports at 1, 2, 4 and 8 alerts.
+            assert len(reports) == 4 and len(triage_calls) == 4
+            assert [job.status for job in jobs].count("COALESCED") == 4
+            coalesced = jobs[2]
+            covered = coalesced.output["coalesced"][coalesced.output["incident_ids"][0]]
+            assert covered in {str(report.id) for report in reports}
+            assert not coalesced.output.get("investigations")
+    run(scenario)
+
+
+def test_new_technique_reinvestigates_without_volume_change():
+    async def scenario(factory):
+        async with factory() as db:
+            workflow = SOCWorkflow()
+            for index in range(2):
+                await ingest(db, detection(f"same-{index}", when=NOW - timedelta(minutes=5 - index)))
+                await workflow.process(db, await workflow.claim(db))
+            same = detection("same-2", when=NOW - timedelta(minutes=3))
+            await ingest(db, same)
+            third = await workflow.claim(db)
+            await workflow.process(db, third)
+            assert third.status == "COALESCED"
+            changed = detection("new-technique", when=NOW - timedelta(minutes=2))
+            changed.alert.detection.mitre_ids = ["T1059.001", "T1105"]
+            await ingest(db, changed)
+            fourth = await workflow.claim(db)
+            await workflow.process(db, fourth)
+            assert fourth.status == "AWAITING_REVIEW"
+            assert len((await db.scalars(select(Investigation))).all()) == 3
+    run(scenario)
+
+
+def test_sliding_correlation_window_links_each_alert_to_one_incident():
+    from app.models.incident import IncidentAlert
+    from app.schemas.incident import CorrelationRunRequest
+    from app.services.correlation import CorrelationService
+    async def scenario(factory):
+        async with factory() as db:
+            start = NOW - timedelta(minutes=100)
+            for index in range(31):
+                when = start + timedelta(minutes=3 * index)
+                await ingest(db, detection(f"steady-{index}", when=when))
+                # Per-alert runs as the worker does them: the 60-minute lookback slides each time.
+                correlation = CorrelationService(clock=lambda when=when: when + timedelta(microseconds=1))
+                result = await correlation.run(db, CorrelationRunRequest(lookback_minutes=60, window_minutes=10, min_alerts=1))
+                assert result.incidents
+            links = (await db.scalars(select(IncidentAlert))).all()
+            assert len(links) == len({link.alert_id for link in links}) == 31
+            incidents = (await db.scalars(select(Incident))).all()
+            assert sum(incident.alert_count for incident in incidents) == 31
+    run(scenario)
+
+
 @pytest.mark.skipif(not os.environ.get("SOC_TEST_DATABASE_URL", "").startswith("postgresql"), reason="PostgreSQL row-lock test")
 def test_concurrent_workers_claim_distinct_jobs():
     async def scenario(factory):

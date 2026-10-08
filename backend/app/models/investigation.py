@@ -21,6 +21,8 @@ class Investigation(Base):
     provider_mode: Mapped[str] = mapped_column(String(20), nullable=False)
     model_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     workflow_key: Mapped[str | None] = mapped_column(String(100), nullable=True, unique=True)
+    # Material incident facts the report was generated from; see incident_signature().
+    incident_signature: Mapped[str | None] = mapped_column(String(64), nullable=True)
     status: Mapped[str] = mapped_column(String(20), nullable=False, default="PENDING_REVIEW", index=True)
     plan: Mapped[dict] = mapped_column(JSON, nullable=False)
     evidence: Mapped[list] = mapped_column(JSON, nullable=False)

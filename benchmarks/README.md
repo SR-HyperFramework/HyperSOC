@@ -118,6 +118,34 @@ co-occur with attack alerts. Masked agent identities and redacted IPs also
 invalidate incident grouping and IOC-reputation ground truth. Do not turn
 batch timings into a CV claim about manual time saved.
 
+### Worker workload replay
+
+`batch_replay.py` drives correlation and triage itself, so it bypasses the
+production path. `worker_replay.py` replays the same pinned, redacted 738 alerts
+through signed ingestion with automation enabled: every alert queues a workflow
+job, and the stack's worker(s) drain the queue exactly as in production
+(understanding, Hub context, enrichment, per-alert correlation, triage and
+investigation). The runner only ingests and waits; it does not call any stage.
+
+```bash
+make benchmark-worker                       # 1 worker
+BENCHMARK_WORKERS=3 make benchmark-worker   # scaled workers
+```
+
+Optional variables: `BENCHMARK_LABEL` (stored in the result), `BENCHMARK_TIMEOUT`
+(drain limit in seconds, default 3600). On Git Bash for Windows, set
+`MSYS2_ARG_CONV_EXCL="/workspace;/results"` so container paths are not rewritten.
+
+The result (`worker-workload-*.json`) reads worker state from the isolated
+database with plain SQL, so the same runner works across code revisions. It
+records job counts by status, retries and errors, queue makespan, per-job
+enqueue-to-finish latency, incidents, investigations created (total, per alert,
+maximum per incident), and an upper-bound estimate of model calls if every
+provider were live. With exactly one worker it also records per-job service
+time and its median per completion decile, which exposes per-alert correlation
+cost growing with the alerts inside the lookback window. Providers stay offline,
+so timings measure pipeline overhead, not model latency.
+
 This is a smoke/pilot dataset, **not** the final study described in
 [`docs/soc-workflow-benchmark.md`](../docs/soc-workflow-benchmark.md). In
 particular, it is too small, is not class-balanced, has no decoy or multi-group

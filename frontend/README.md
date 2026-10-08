@@ -13,8 +13,10 @@ controls; offline results explicitly identify simulation.
 
 ## Workspace views
 
-The three navigation views use persisted backend data:
+The four navigation views use persisted backend data:
 
+- Overview (default): threat posture, KPI strip, 24h activity, open-severity mix,
+  priority queue, top MITRE techniques and automation pipeline status.
 - Incidents: filterable queue, case evidence, review and response.
 - Intelligence hub: asset/identity/process/IP/technique entities and observed relationships.
 - Automation: alert stages, checkpoint evidence, attempts and failed-job retry.
@@ -28,6 +30,8 @@ the console currently served by FastAPI.
 
 ```text
 GET  /api/v1/dashboard/summary
+GET  /api/v1/dashboard/timeline
+GET  /api/v1/dashboard/mitre
 GET  /api/v1/auth/me
 POST /api/v1/auth/login
 POST /api/v1/auth/logout

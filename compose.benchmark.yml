@@ -6,7 +6,8 @@ x-benchmark-backend: &benchmark-backend
   environment:
     APP_SECRET_KEY: benchmark-only-secret-value
     AUTH_ENABLED: "false"
-    AUTOMATION_ENABLED: "false"
+    # Only the worker workload enables automation; other benchmarks drive stages directly.
+    AUTOMATION_ENABLED: ${BENCHMARK_AUTOMATION:-false}
     INVESTIGATOR_PROVIDER_MODE: offline
     ALERT_UNDERSTANDING_PROVIDER_MODE: offline
     DATABASE_URL: postgresql+asyncpg://benchmark:benchmark@postgres:5432/benchmark
@@ -48,6 +49,18 @@ services:
       interval: 2s
       timeout: 3s
       retries: 30
+
+  worker:
+    <<: *benchmark-backend
+    command: ["python", "-m", "app.workers.soc"]
+    profiles: ["worker"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    volumes:
+      - ./knowledge:/app/knowledge:ro
 
   postgres:
     image: postgres:16-alpine

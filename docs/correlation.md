@@ -44,6 +44,13 @@ FALSE_POSITIVE
 correlation is idempotent: existing open incidents are updated and duplicate join
 rows are not created.
 
+An alert belongs to at most one open incident; the first incident that claims it
+keeps it. Because each run anchors its windows inside a sliding lookback, a new
+group can span alerts already owned by two open incidents. Such a group never
+relinks owned alerts: its unclaimed alerts join the incident owning the group's
+latest claimed alert, and that incident is updated from its own alerts only.
+Incidents are not merged automatically.
+
 ## Rules
 
 The initial window is 10 minutes by default. The baseline grouping rule is:

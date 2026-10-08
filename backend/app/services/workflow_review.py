@@ -7,12 +7,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.investigation import Investigation
 
 
-async def workflow_review_status(db: AsyncSession, job_id: UUID) -> str:
+async def workflow_review_status(db: AsyncSession, job_id: UUID, *, coalesced: bool = False) -> str:
     reports = (await db.scalars(select(Investigation).where(
         Investigation.workflow_key.startswith(f"{job_id}:"),
     ))).all()
     if not reports:
-        return "COMPLETE"
+        # COALESCED: the alert joined incidents whose existing reports already cover it.
+        return "COALESCED" if coalesced else "COMPLETE"
     reviewed = False
     for report in reports:
         if report.status != "PENDING_REVIEW":

@@ -1,4 +1,4 @@
-.PHONY: build test benchmark-test benchmark-smoke benchmark-workload benchmark-triage benchmark-jev benchmark-verify benchmark-prepare benchmark-clean compose-up compose-down
+.PHONY: build test benchmark-test benchmark-smoke benchmark-workload benchmark-triage benchmark-jev benchmark-worker benchmark-verify benchmark-prepare benchmark-clean compose-up compose-down
 
 build:
 	docker compose build backend
@@ -20,6 +20,9 @@ benchmark-triage:
 
 benchmark-jev:
 	./scripts/benchmark.sh workload-jev
+
+benchmark-worker:
+	./scripts/benchmark.sh workload-worker
 
 benchmark-verify:
 	./scripts/benchmark.sh verify-source

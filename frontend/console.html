@@ -2,30 +2,75 @@
 <html lang="en">
 <head>
   <meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>HyperSOC investigator</title>
+  <meta name="color-scheme" content="dark">
+  <title>HyperSOC · Operations console</title>
   <link rel="icon" type="image/svg+xml" href="/assets/favicon.svg">
   <link rel="stylesheet" href="/assets/soc.css">
   <script src="/assets/soc.js" defer></script>
 </head>
 <body>
-  <a class="skip" href="#workspace">Skip to investigation</a>
-  <header class="app-header"><a href="/" class="brand">HyperSOC</a><nav aria-label="Workspace">
-    <button data-view="incidents" aria-pressed="true">Incidents</button><button data-view="hub" aria-pressed="false">Intelligence hub</button><button data-view="workflows" aria-pressed="false">Automation</button>
-  </nav><div class="account"><span id="account"></span><button id="logout" hidden>Sign out</button></div></header>
-  <p id="notice" role="status" aria-live="polite"></p>
-  <section id="login-panel" class="login" hidden><h1>Sign in to your SOC workspace</h1><p>Review detections with internal context and source evidence.</p>
-    <form id="login-form"><label>Username<input id="username" autocomplete="username" required maxlength="128"></label><label>Password<input id="password" type="password" autocomplete="current-password" required maxlength="1024"></label><button class="primary" type="submit">Sign in</button></form>
+  <a class="skip" href="#workspace">Skip to workspace</a>
+
+  <section id="login-panel" class="login" hidden>
+    <div class="login-art" aria-hidden="true">
+      <div class="login-brand"><span class="mark"></span>HyperSOC</div>
+      <p class="login-tag">Detect. Investigate. Decide.</p>
+      <ul class="login-steps"><li>Ingest</li><li>Correlate</li><li>Investigate</li><li>Analyst review</li><li>Respond</li></ul>
+    </div>
+    <div class="login-card">
+      <p class="eyebrow">Secure workspace</p>
+      <h1>Sign in to your SOC</h1>
+      <p class="muted">Review detections against internal context and cited source evidence.</p>
+      <form id="login-form"><label>Username<input id="username" autocomplete="username" required maxlength="128"></label><label>Password<input id="password" type="password" autocomplete="current-password" required maxlength="1024"></label><button class="primary" type="submit">Sign in</button></form>
+    </div>
   </section>
-  <main id="workspace" hidden>
-    <div class="overview"><div id="summary" aria-label="Live SOC counts"></div><button id="refresh">Refresh data</button></div>
-    <section id="incidents-view" class="case-layout">
-      <aside class="queue"><h2>Incident queue</h2><label>Filter status<select id="status-filter"><option value="">All statuses</option><option>NEW</option><option>TRIAGED</option><option>INVESTIGATING</option><option>FALSE_POSITIVE</option><option>CONTAINED</option><option>RESOLVED</option></select></label><div id="incident-list"></div></aside>
-      <article id="case" class="case"><div class="empty"><h1>Incident investigator</h1><p>Select an incident to review its findings, evidence and response.</p></div></article>
-    </section>
-    <section id="hub-view" hidden><div class="section-heading"><div><h1>Cyber Intelligence Hub</h1><p>Assets, identities and relationships observed across your connected sources.</p></div></div>
-      <div class="hub-layout"><section class="surface"><h2>Entities</h2><label>Entity type<select id="entity-kind"><option value="">All types</option><option value="asset">Assets</option><option value="identity">Identities</option><option value="process">Processes</option><option value="ip">IP addresses</option><option value="technique">MITRE techniques</option></select></label><div id="entity-list"></div></section><section class="surface"><h2>Relationship explorer</h2><div id="entity-graph"><p class="muted">Select an entity to explore its recorded relationships.</p></div></section></div>
-    </section>
-    <section id="workflows-view" hidden><h1>Alert automation</h1><p class="muted">Each alert keeps its processing checkpoints. Analyst decisions and response approval remain explicit actions.</p><div id="workflow-list"></div></section>
-  </main>
+
+  <div id="app" class="app" hidden>
+    <aside class="rail">
+      <a href="/" class="brand" aria-label="HyperSOC home"><span class="mark" aria-hidden="true"></span><span class="brand-text">Hyper<b>SOC</b></span></a>
+      <nav aria-label="Workspace">
+        <button data-view="overview" aria-pressed="true"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M3 3h8v10H3zM13 3h8v6h-8zM13 11h8v10h-8zM3 15h8v6H3z"/></svg><span>Overview</span></button>
+        <button data-view="incidents" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3 2 20h20zM12 10v4M12 17v.5"/></svg><span>Incidents</span></button>
+        <button data-view="hub" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="12" r="3"/><circle cx="4.5" cy="5" r="2"/><circle cx="19.5" cy="5" r="2"/><circle cx="12" cy="21" r="1.6"/><path d="M6 6.4 9.8 10M18 6.4 14.2 10M12 15v4.4"/></svg><span>Intelligence hub</span></button>
+        <button data-view="workflows" aria-pressed="false"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 6h10M4 12h16M4 18h7"/><circle cx="17" cy="6" r="2.2"/><circle cx="14" cy="18" r="2.2"/></svg><span>Automation</span></button>
+      </nav>
+      <div class="rail-foot"><div class="who"><span class="avatar" id="avatar" aria-hidden="true"></span><span id="account"></span></div><button id="logout" class="ghost" hidden>Sign out</button></div>
+    </aside>
+
+    <div class="main">
+      <header class="topbar">
+        <div class="title-block"><p class="eyebrow" id="view-eyebrow">Command overview</p><h1 id="view-title">Overview</h1></div>
+        <div id="summary" class="ticker" aria-label="Live SOC counts"></div>
+        <div class="top-actions"><span class="clock" id="clock" aria-label="Current UTC time"></span><span class="updated" id="updated"></span><button id="refresh" class="ghost"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 12a8 8 0 1 1-2.3-5.6M20 4v5h-5"/></svg>Refresh</button></div>
+      </header>
+      <p id="notice" role="status" aria-live="polite"></p>
+
+      <main id="workspace" tabindex="-1">
+        <section id="overview-view" class="overview">
+          <div id="posture" class="posture" data-level="unknown"><div class="posture-light" aria-hidden="true"></div><div><p class="eyebrow">Threat posture</p><strong id="posture-level">Awaiting data</strong><p id="posture-text" class="muted"></p></div></div>
+          <div id="kpis" class="kpis" aria-label="SOC metrics"></div>
+          <div class="ov-grid">
+            <section class="panel span-2"><header class="panel-head"><h2>Activity · last 24 hours</h2><div class="legend"><span class="key alerts">Alerts</span><span class="key incidents">New incidents</span></div></header><div id="activity-chart" class="chart"></div></section>
+            <section class="panel"><header class="panel-head"><h2>Open incidents by severity</h2></header><div id="severity-mix"></div></section>
+            <section class="panel span-2"><header class="panel-head"><h2>Priority queue</h2><button class="link" data-goto="incidents">Open investigator →</button></header><div id="priority-list" class="priority"></div></section>
+            <section class="panel"><header class="panel-head"><h2>Top MITRE ATT&amp;CK techniques</h2></header><div id="mitre-list" class="mitre"></div></section>
+            <section class="panel span-3"><header class="panel-head"><h2>Automation pipeline</h2><button class="link" data-goto="workflows">View jobs →</button></header><div id="pipeline" class="pipeline"></div><div id="pipeline-status" class="pipe-status"></div></section>
+          </div>
+        </section>
+
+        <section id="incidents-view" class="case-layout" hidden>
+          <aside class="queue"><header class="panel-head"><h2>Incident queue</h2><span id="queue-count" class="count"></span></header><label>Filter status<select id="status-filter"><option value="">All statuses</option><option>NEW</option><option>TRIAGED</option><option>INVESTIGATING</option><option>FALSE_POSITIVE</option><option>CONTAINED</option><option>RESOLVED</option></select></label><div id="incident-list"></div></aside>
+          <article id="case" class="case"><div class="empty"><div class="radar" aria-hidden="true"></div><h1>Incident investigator</h1><p>Select an incident to review its findings, evidence and response.</p></div></article>
+        </section>
+
+        <section id="hub-view" hidden>
+          <p class="lede">Assets, identities and relationships observed across your connected sources.</p>
+          <div class="hub-layout"><section class="surface"><h2>Entities</h2><label>Entity type<select id="entity-kind"><option value="">All types</option><option value="asset">Assets</option><option value="identity">Identities</option><option value="process">Processes</option><option value="ip">IP addresses</option><option value="technique">MITRE techniques</option></select></label><div id="entity-list"></div></section><section class="surface"><h2>Relationship explorer</h2><div id="entity-graph"><p class="muted">Select an entity to explore its recorded relationships.</p></div></section></div>
+        </section>
+
+        <section id="workflows-view" hidden><p class="lede">Each alert keeps its processing checkpoints. Analyst decisions and response approval remain explicit actions.</p><div id="workflow-list"></div></section>
+      </main>
+    </div>
+  </div>
 </body>
 </html>

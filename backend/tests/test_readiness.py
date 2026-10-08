@@ -79,4 +79,4 @@ def test_readiness_hides_database_errors(failure):
 def test_expected_heads_come_from_alembic_scripts():
     from app.core.readiness import expected_migration_heads
 
-    assert expected_migration_heads() == {"0010"}
+    assert expected_migration_heads() == {"0011"}

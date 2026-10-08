@@ -411,7 +411,17 @@ class CorrelationService:
         return Counter(clean).most_common(1)[0][0]
 
     async def _upsert_incident(self, db: AsyncSession, draft: _IncidentDraft) -> _UpsertResult:
-        existing = await self._find_existing_incident(db, draft)
+        owners = await self._open_owners(db, draft.alert_ids)
+        if owners:
+            # The lookback window slides, so a draft can straddle open incidents. An alert stays
+            # with the incident that claimed it first; unclaimed alerts join the incident that
+            # owns the draft's latest claimed alert, which is updated from its own alerts only.
+            existing = next(owners[candidate.alert.id] for candidate in reversed(draft.candidates) if candidate.alert.id in owners)
+            draft = self._draft_from_candidates(
+                [candidate for candidate in draft.candidates if owners.get(candidate.alert.id, existing).id == existing.id]
+            )
+        else:
+            existing = await self._find_existing_incident(db, draft)
         if existing is None:
             incident = Incident(
                 id=uuid4(),
@@ -437,13 +447,20 @@ class CorrelationService:
         await self._update_incident_fields(db, existing, draft)
         return _UpsertResult(incident=existing, created=False)
 
-    async def _find_existing_incident(self, db: AsyncSession, draft: _IncidentDraft) -> Incident | None:
-        result = await db.scalars(select(IncidentAlert).where(IncidentAlert.alert_id.in_(draft.alert_ids)))
-        for association in result.all():
-            incident = await db.get(Incident, association.incident_id)
-            if incident is not None and incident.status in _OPEN_STATUSES:
-                return incident
+    async def _open_owners(self, db: AsyncSession, alert_ids: list[UUID]) -> dict[UUID, Incident]:
+        rows = await db.execute(
+            select(IncidentAlert.alert_id, Incident)
+            .join(Incident, Incident.id == IncidentAlert.incident_id)
+            .where(IncidentAlert.alert_id.in_(alert_ids), Incident.status.in_(_OPEN_STATUSES))
+            .order_by(IncidentAlert.created_at, IncidentAlert.id)
+        )
+        owners: dict[UUID, Incident] = {}
+        for alert_id, incident in rows.all():
+            # Links duplicated before first-claim ownership resolve to the earliest link.
+            owners.setdefault(alert_id, incident)
+        return owners
 
+    async def _find_existing_incident(self, db: AsyncSession, draft: _IncidentDraft) -> Incident | None:
         statement = select(Incident).where(
             Incident.status.in_(_OPEN_STATUSES),
             Incident.primary_host == draft.primary_host,

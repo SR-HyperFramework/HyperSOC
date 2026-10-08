@@ -89,6 +89,22 @@ case "$command_name" in
     run_backend benchmarks/validate_result.py workload "$output"
     printf 'Result: %s\n' "$ROOT/.benchmark-runs/${output#/results/}"
     ;;
+  workload-worker)
+    # Production path: signed ingestion queues one job per alert and real workers drain them.
+    workers=${BENCHMARK_WORKERS:-1}
+    [[ "$workers" =~ ^[1-9][0-9]*$ ]] || { printf 'BENCHMARK_WORKERS must be a positive integer
+' >&2; exit 2; }
+    output=${1:-$(new_output worker-workload)}
+    [[ "$output" == /results/* ]] || { printf 'Output must be under /results
+' >&2; exit 2; }
+    export BENCHMARK_AUTOMATION=true
+    compose=(docker compose -p "$project" -f "$COMPOSE_FILE" --profile worker)
+    start_stack
+    "${compose[@]}" up -d --scale worker="$workers" worker
+    run_backend benchmarks/worker_replay.py --base-url http://127.0.0.1:8000 --isolated-db       --workers "$workers" --label "${BENCHMARK_LABEL:-}" --timeout "${BENCHMARK_TIMEOUT:-3600}" --output "$output"
+    printf 'Result: %s
+' "$ROOT/.benchmark-runs/${output#/results/}"
+    ;;
   verify-source)
     docker build --target test -t hypersoc-backend-test -f backend/Dockerfile .
     docker run --rm -v "$ROOT:/workspace:ro" -w /workspace hypersoc-backend-test \
@@ -116,6 +132,7 @@ Usage: scripts/benchmark.sh COMMAND [OUTPUT]
   workload       Run the pinned 738-alert workload through a disposable stack
   workload-triage Run workload with offline incident triage
   workload-jev   Run workload with OpenRouter Jev triage (external requests/cost)
+  workload-worker Run the 738-alert workload through ingestion and BENCHMARK_WORKERS workers
   verify-source  Verify observed cases against the pinned public source
   prepare        Create blinded pilot packets under .benchmark-runs
   clean          Remove leftover hypersoc-benchmark-* Compose projects
